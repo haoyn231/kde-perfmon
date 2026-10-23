@@ -126,6 +126,9 @@ cmake --build build -j"$(nproc)"
 # unit tests + live /proc sampling assertions
 ./build/perfmon-tests
 
+# QML lint (on Arch the Qt 6 binary is /usr/lib/qt6/bin/qmllint)
+/usr/lib/qt6/bin/qmllint -I package/contents/lib package/contents/ui/*.qml
+
 # render the real popup QML to PNG without a panel (prints texts and theme colors)
 QT_QPA_PLATFORMTHEME=KDE QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
     ./build/perfmon-preview package/contents/ui/FullRepresentation.qml /tmp/preview

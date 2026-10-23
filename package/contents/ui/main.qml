@@ -1,8 +1,5 @@
 import QtQuick
 import org.kde.plasma.plasmoid
-import org.kde.plasma.core as PlasmaCore
-import org.kde.kirigami as Kirigami
-
 import "../lib/Hao/PerfMon"
 import "Format.js" as Format
 

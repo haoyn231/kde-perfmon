@@ -126,6 +126,9 @@ cmake --build build -j"$(nproc)"
 # 单元测试 + 真实 /proc 采样测试
 ./build/perfmon-tests
 
+# QML 静态检查（Arch 上 Qt6 版位于 /usr/lib/qt6/bin/qmllint）
+/usr/lib/qt6/bin/qmllint -I package/contents/lib package/contents/ui/*.qml
+
 # 不依赖面板，直接把真实弹窗 QML 渲染成 PNG（同时打印文本与主题颜色）
 QT_QPA_PLATFORMTHEME=KDE QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
     ./build/perfmon-preview package/contents/ui/FullRepresentation.qml /tmp/preview

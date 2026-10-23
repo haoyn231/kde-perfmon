@@ -14,7 +14,7 @@ cmake --build build -j"$(nproc)"
 
 ./build/perfmon-tests
 
-qmllint -I package/contents/lib package/contents/ui/*.qml
+/usr/lib/qt6/bin/qmllint -I package/contents/lib package/contents/ui/*.qml
 
 export QT_QPA_PLATFORM=offscreen
 export QT_QUICK_BACKEND=software
