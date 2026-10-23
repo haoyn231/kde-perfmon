@@ -8,6 +8,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QTest>
 #include <QTimer>
 
 #include <cstdio>
@@ -165,6 +166,61 @@ int main(int argc, char **argv)
                          list->property("count").toInt());
         }
     });
+
+    if (qEnvironmentVariableIsSet("PERFMON_PREVIEW_CLICK")) {
+        QTimer::singleShot(1800, &app, [&]() {
+            QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+            QList<QQuickItem *> rows;
+            collectItemsWithProperty(view.rootObject(), "pid", rows);
+            if (!list || rows.isEmpty()) {
+                std::fprintf(stderr, "CLICK failed: no list/rows\n");
+                return;
+            }
+            const QPointF listOrigin = list->mapToScene(QPointF(0, 0));
+            const QRectF listRect(listOrigin, QSizeF(list->width(), list->height()));
+            QQuickItem *target = nullptr;
+            for (QQuickItem *row : rows) {
+                const QPointF p = row->mapToScene(QPointF(30, 10));
+                if (listRect.contains(p)) {
+                    target = row;
+                    break;
+                }
+            }
+            if (!target) {
+                std::fprintf(stderr, "CLICK failed: no row inside the viewport\n");
+                return;
+            }
+            const int pid = target->property("pid").toInt();
+            const QPoint clickPoint = target->mapToScene(QPointF(30, 10)).toPoint();
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, clickPoint);
+            std::fprintf(stderr, "CLICK1 pid=%d at=%d,%d expandedPid=%s\n", pid, clickPoint.x(), clickPoint.y(),
+                         view.rootObject()->property("expandedPid").toString().toUtf8().constData());
+            QTimer::singleShot(400, &app, [&app, &view, pid]() {
+                std::fprintf(stderr, "CLICK1-LATER expandedPid=%s\n",
+                             view.rootObject()->property("expandedPid").toString().toUtf8().constData());
+                QList<QQuickItem *> currentRows;
+                collectItemsWithProperty(view.rootObject(), "pid", currentRows);
+                QQuickItem *again = nullptr;
+                QPoint secondPoint;
+                for (QQuickItem *row : currentRows) {
+                    if (row->property("pid").toInt() == pid) {
+                        again = row;
+                        secondPoint = row->mapToScene(QPointF(30, 10)).toPoint();
+                        break;
+                    }
+                }
+                if (!again) {
+                    std::fprintf(stderr, "CLICK2 failed: row %d gone\n", pid);
+                    return;
+                }
+                std::fprintf(stderr, "CLICK2-TARGET pid=%d expanded=%d y=%d\n", pid,
+                             again->property("expanded").toBool(), secondPoint.y());
+                QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, secondPoint);
+                std::fprintf(stderr, "CLICK2 expandedPid=%s\n",
+                             view.rootObject()->property("expandedPid").toString().toUtf8().constData());
+            });
+        });
+    }
 
     if (qEnvironmentVariableIsSet("PERFMON_PREVIEW_EXPAND")) {
         QTimer::singleShot(1500, &app, [&]() {

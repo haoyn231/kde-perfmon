@@ -29,7 +29,7 @@ add_custom_command(TARGET perfmonplugin POST_BUILD
 )
 
 add_executable(perfmon-preview tools/preview.cpp)
-target_link_libraries(perfmon-preview PRIVATE Qt6::Quick Qt6::Qml)
+target_link_libraries(perfmon-preview PRIVATE Qt6::Quick Qt6::Qml Qt6::Test)
 
 enable_testing()
 add_executable(perfmon-tests tests/tests.cpp)
