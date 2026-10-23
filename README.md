@@ -47,12 +47,12 @@ Release 包内是**已经编译好**的插件，普通用户不需要安装编�
 1. 系统要求：KDE Plasma 6（Qt 6.5+）、Kirigami（Plasma 自带）。发布包在 Arch Linux / Plasma 6.8 / Qt 6.12 上构建；其它发行版如果插件加载失败，请改用「方式二」从源码构建。
 2. 从 [Releases](https://github.com/haoyn231/kde-perfmon/releases) 下载 `kde-perfmon-vX.Y.Z.tar.gz` 和对应的 `.sha256` 文件，并校验：
    ```bash
-   sha256sum -c kde-perfmon-v1.0.0.tar.gz.sha256
+   sha256sum -c kde-perfmon-v1.0.1.tar.gz.sha256
    ```
 3. 解压到当前用户的 Plasma 小程序目录：
    ```bash
    mkdir -p ~/.local/share/plasma/plasmoids
-   tar -xzf kde-perfmon-v1.0.0.tar.gz -C ~/.local/share/plasma/plasmoids
+   tar -xzf kde-perfmon-v1.0.1.tar.gz -C ~/.local/share/plasma/plasmoids
    ```
    解压后应存在：
    ```
@@ -101,6 +101,11 @@ systemctl --user restart plasma-plasmashell.service
   - 再次点击当前列，切换升序 / 降序；
   - 右侧箭头按钮切换当前列的排序方向；
   - 鼠标滚轮滚动进程列表。
+- 点击进程行展开 / 折叠：
+  - 展开后显示完整命令行、`PPID` 与内存占比；
+  - `Terminate` 发送 SIGTERM，`Force kill` 发送 SIGKILL（仅 PID > 1000）；
+  - 点击操作按钮后需要在行内再次确认；
+  - 信号发送失败时会在展开行内显示系统错误信息。
 
 ## 数据语义
 
