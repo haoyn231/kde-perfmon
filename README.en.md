@@ -33,6 +33,7 @@ Inspired by [DankMaterialShell (DMS)](https://github.com/AvengeMedia/DankMateria
 - Popup header: distro logo, distro name, hostname, user avatar and username
 - `CPU` / `Memory` sort chips; click the active chip again to flip ascending/descending; the arrow button does the same
 - Process rows: name, full command line (elided), CPU%, RSS, PID — no process icons
+- Click a row to expand the full command, PPID and memory percentage, then send SIGTERM or SIGKILL (force kill only for PIDs above 1000, with an inline confirmation)
 - Scroll position is preserved across the 1-second list refresh; the PID column is not covered by the overlay scrollbar
 - When the popup is closed only total CPU/memory are sampled; `/proc/<pid>` scanning is disabled
 - Everything is bound to `Kirigami.Theme`, so light/dark switches apply live

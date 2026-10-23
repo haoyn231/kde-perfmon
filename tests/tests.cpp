@@ -3,6 +3,7 @@
 
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QProcess>
 #include <QUrl>
 #include <QtTest>
 
@@ -18,6 +19,7 @@ private Q_SLOTS:
     void processCpuMath();
     void sortByCpuAndMemory();
     void liveSampling();
+    void processSignals();
 };
 
 void PerfTest::parseCpuTimes()
@@ -177,6 +179,35 @@ void PerfTest::liveSampling()
     QCOMPARE(backend.sortKey(), QStringLiteral("memory"));
     QVERIFY(!backend.sortAscending());
     QVERIFY(verifySorted(true, false));
+}
+
+void PerfTest::processSignals()
+{
+    PerfBackend backend;
+
+    // PID 1 and non-positive PIDs are always refused.
+    QVERIFY(!backend.terminateProcess(1).isEmpty());
+    QVERIFY(!backend.killProcess(1).isEmpty());
+    QVERIFY(!backend.terminateProcess(-5).isEmpty());
+
+    // Force kill keeps DMS' PID > 1000 guard.
+    QVERIFY(!backend.killProcess(500).isEmpty());
+
+    // Nonexistent process -> ESRCH.
+    QVERIFY(!backend.terminateProcess(999999999).isEmpty());
+    QVERIFY(!backend.killProcess(999999999).isEmpty());
+
+    QProcess termVictim;
+    termVictim.start(QStringLiteral("sleep"), {QStringLiteral("30")});
+    QVERIFY(termVictim.waitForStarted(3000));
+    QCOMPARE(backend.terminateProcess(int(termVictim.processId())), QString());
+    QVERIFY(termVictim.waitForFinished(3000));
+
+    QProcess killVictim;
+    killVictim.start(QStringLiteral("sleep"), {QStringLiteral("30")});
+    QVERIFY(killVictim.waitForStarted(3000));
+    QCOMPARE(backend.killProcess(int(killVictim.processId())), QString());
+    QVERIFY(killVictim.waitForFinished(3000));
 }
 
 QTEST_GUILESS_MAIN(PerfTest)

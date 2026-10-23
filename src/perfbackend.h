@@ -62,6 +62,12 @@ public:
     Q_INVOKABLE void setSortKey(const QString &key);
     Q_INVOKABLE void toggleSort(const QString &key);
 
+    // Returns an empty string on success, otherwise a human readable error.
+    // SIGTERM is allowed for any PID > 1; SIGKILL only for PIDs > 1000, the
+    // same guard DMS uses for its "Force Kill" action.
+    Q_INVOKABLE QString terminateProcess(int pid);
+    Q_INVOKABLE QString killProcess(int pid);
+
 public Q_SLOTS:
     void refresh();
 

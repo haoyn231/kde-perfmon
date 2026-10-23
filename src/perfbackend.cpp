@@ -10,6 +10,9 @@
 #include <QThread>
 #include <QUrl>
 
+#include <cerrno>
+#include <csignal>
+#include <cstring>
 #include <pwd.h>
 #include <unistd.h>
 
@@ -137,6 +140,20 @@ QString localFileUrl(const QString &path)
     return path.isEmpty() ? QString() : QUrl::fromLocalFile(path).toString();
 }
 
+QString signalProcess(int pid, int signalNumber, bool force)
+{
+    if (pid <= 1) {
+        return QStringLiteral("Refusing to signal PID %1").arg(pid);
+    }
+    if (force && pid <= 1000) {
+        return QStringLiteral("Refusing to SIGKILL PID %1 (only PIDs above 1000)").arg(pid);
+    }
+    if (::kill(pid, signalNumber) != 0) {
+        return QString::fromLocal8Bit(std::strerror(errno));
+    }
+    return {};
+}
+
 } // namespace
 
 PerfBackend::PerfBackend(QObject *parent)
@@ -233,6 +250,16 @@ void PerfBackend::toggleSort(const QString &key)
     }
     resort();
     Q_EMIT sortChanged();
+}
+
+QString PerfBackend::terminateProcess(int pid)
+{
+    return signalProcess(pid, SIGTERM, false);
+}
+
+QString PerfBackend::killProcess(int pid)
+{
+    return signalProcess(pid, SIGKILL, true);
 }
 
 void PerfBackend::resort()

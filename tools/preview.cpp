@@ -8,6 +8,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QTest>
 #include <QTimer>
 
 #include <cstdio>
@@ -17,6 +18,11 @@ namespace {
 void dumpTexts(QQuickItem *item, int depth)
 {
     if (!item) {
+        return;
+    }
+    // Delegate details/confirmation rows exist in the item tree even when
+    // collapsed; only report what is actually visible.
+    if (!item->isVisible()) {
         return;
     }
     if (item->metaObject()->indexOfProperty("text") >= 0) {
@@ -39,6 +45,35 @@ void dumpTexts(QQuickItem *item, int depth)
     for (QQuickItem *child : children) {
         dumpTexts(child, depth + 1);
     }
+}
+
+void collectItemsWithProperty(QQuickItem *item, const char *name, QList<QQuickItem *> &out)
+{
+    if (!item) {
+        return;
+    }
+    if (item->metaObject()->indexOfProperty(name) >= 0) {
+        out.append(item);
+    }
+    for (QQuickItem *child : item->childItems()) {
+        collectItemsWithProperty(child, name, out);
+    }
+}
+
+QQuickItem *topmostProcessRow(QQuickItem *root)
+{
+    QList<QQuickItem *> rows;
+    collectItemsWithProperty(root, "pid", rows);
+    QQuickItem *best = nullptr;
+    qreal bestY = 1e9;
+    for (QQuickItem *row : rows) {
+        const qreal y = row->mapToScene(QPointF(0, 0)).y();
+        if (y < bestY) {
+            bestY = y;
+            best = row;
+        }
+    }
+    return best;
 }
 
 } // namespace
@@ -131,6 +166,98 @@ int main(int argc, char **argv)
                          list->property("count").toInt());
         }
     });
+
+    if (qEnvironmentVariableIsSet("PERFMON_PREVIEW_CLICK")) {
+        QTimer::singleShot(1800, &app, [&]() {
+            QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+            QList<QQuickItem *> rows;
+            collectItemsWithProperty(view.rootObject(), "pid", rows);
+            if (!list || rows.isEmpty()) {
+                std::fprintf(stderr, "CLICK failed: no list/rows\n");
+                return;
+            }
+            const QPointF listOrigin = list->mapToScene(QPointF(0, 0));
+            const QRectF listRect(listOrigin, QSizeF(list->width(), list->height()));
+            QQuickItem *target = nullptr;
+            for (QQuickItem *row : rows) {
+                const QPointF p = row->mapToScene(QPointF(30, 10));
+                if (listRect.contains(p)) {
+                    target = row;
+                    break;
+                }
+            }
+            if (!target) {
+                std::fprintf(stderr, "CLICK failed: no row inside the viewport\n");
+                return;
+            }
+            const int pid = target->property("pid").toInt();
+            const QPoint clickPoint = target->mapToScene(QPointF(30, 10)).toPoint();
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, clickPoint);
+            std::fprintf(stderr, "CLICK1 pid=%d at=%d,%d expandedPid=%s\n", pid, clickPoint.x(), clickPoint.y(),
+                         view.rootObject()->property("expandedPid").toString().toUtf8().constData());
+            QTimer::singleShot(400, &app, [&app, &view, pid]() {
+                std::fprintf(stderr, "CLICK1-LATER expandedPid=%s\n",
+                             view.rootObject()->property("expandedPid").toString().toUtf8().constData());
+                QList<QQuickItem *> currentRows;
+                collectItemsWithProperty(view.rootObject(), "pid", currentRows);
+                QQuickItem *again = nullptr;
+                QPoint secondPoint;
+                for (QQuickItem *row : currentRows) {
+                    if (row->property("pid").toInt() == pid) {
+                        again = row;
+                        secondPoint = row->mapToScene(QPointF(30, 10)).toPoint();
+                        break;
+                    }
+                }
+                if (!again) {
+                    std::fprintf(stderr, "CLICK2 failed: row %d gone\n", pid);
+                    return;
+                }
+                std::fprintf(stderr, "CLICK2-TARGET pid=%d expanded=%d y=%d\n", pid,
+                             again->property("expanded").toBool(), secondPoint.y());
+                QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, secondPoint);
+                std::fprintf(stderr, "CLICK2 expandedPid=%s\n",
+                             view.rootObject()->property("expandedPid").toString().toUtf8().constData());
+            });
+        });
+    }
+
+    if (qEnvironmentVariableIsSet("PERFMON_PREVIEW_EXPAND")) {
+        QTimer::singleShot(1500, &app, [&]() {
+            QQuickItem *row = topmostProcessRow(view.rootObject());
+            if (!row) {
+                std::fprintf(stderr, "EXPAND failed: no process row\n");
+                return;
+            }
+            const int pid = row->property("pid").toInt();
+            view.rootObject()->setProperty("expandedPid", QString::number(pid));
+            const QString confirm = qEnvironmentVariable("PERFMON_PREVIEW_CONFIRM");
+            if (confirm == QStringLiteral("term") || confirm == QStringLiteral("kill")) {
+                view.rootObject()->setProperty("pendingKillPid", pid);
+                view.rootObject()->setProperty("pendingKillForce", confirm == QStringLiteral("kill"));
+            }
+            std::fprintf(stderr, "EXPANDED pid=%d confirm=%s\n", pid, confirm.toUtf8().constData());
+        });
+        QTimer::singleShot(2600, &app, [&]() {
+            std::fprintf(stderr, "ROOT expandedPid=%s pending=%d\n",
+                         view.rootObject()->property("expandedPid").toString().toUtf8().constData(),
+                         view.rootObject()->property("pendingKillPid").toInt());
+            QList<QQuickItem *> rows;
+            collectItemsWithProperty(view.rootObject(), "pid", rows);
+            int expandedCount = 0;
+            for (QQuickItem *row : rows) {
+                if (!row->property("expanded").toBool()) {
+                    continue;
+                }
+                ++expandedCount;
+                std::fprintf(stderr, "ROW-EXPANDED pid=%d confirm=%d height=%.0f visible=%d\n",
+                             row->property("pid").toInt(),
+                             row->property("confirmPending").toBool(),
+                             row->height(), row->isVisible());
+            }
+            std::fprintf(stderr, "ROWS total=%lld expanded=%d\n", qint64(rows.size()), expandedCount);
+        });
+    }
 
     QTimer::singleShot(3000, &app, [&]() { grab(QStringLiteral("-1")); });
     QTimer::singleShot(9000, &app, [&]() {
