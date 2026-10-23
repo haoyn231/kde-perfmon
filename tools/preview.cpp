@@ -19,6 +19,11 @@ void dumpTexts(QQuickItem *item, int depth)
     if (!item) {
         return;
     }
+    // Delegate details/confirmation rows exist in the item tree even when
+    // collapsed; only report what is actually visible.
+    if (!item->isVisible()) {
+        return;
+    }
     if (item->metaObject()->indexOfProperty("text") >= 0) {
         const QString text = item->property("text").toString();
         if (!text.isEmpty()) {
@@ -39,6 +44,35 @@ void dumpTexts(QQuickItem *item, int depth)
     for (QQuickItem *child : children) {
         dumpTexts(child, depth + 1);
     }
+}
+
+void collectItemsWithProperty(QQuickItem *item, const char *name, QList<QQuickItem *> &out)
+{
+    if (!item) {
+        return;
+    }
+    if (item->metaObject()->indexOfProperty(name) >= 0) {
+        out.append(item);
+    }
+    for (QQuickItem *child : item->childItems()) {
+        collectItemsWithProperty(child, name, out);
+    }
+}
+
+QQuickItem *topmostProcessRow(QQuickItem *root)
+{
+    QList<QQuickItem *> rows;
+    collectItemsWithProperty(root, "pid", rows);
+    QQuickItem *best = nullptr;
+    qreal bestY = 1e9;
+    for (QQuickItem *row : rows) {
+        const qreal y = row->mapToScene(QPointF(0, 0)).y();
+        if (y < bestY) {
+            bestY = y;
+            best = row;
+        }
+    }
+    return best;
 }
 
 } // namespace
@@ -131,6 +165,43 @@ int main(int argc, char **argv)
                          list->property("count").toInt());
         }
     });
+
+    if (qEnvironmentVariableIsSet("PERFMON_PREVIEW_EXPAND")) {
+        QTimer::singleShot(1500, &app, [&]() {
+            QQuickItem *row = topmostProcessRow(view.rootObject());
+            if (!row) {
+                std::fprintf(stderr, "EXPAND failed: no process row\n");
+                return;
+            }
+            const int pid = row->property("pid").toInt();
+            view.rootObject()->setProperty("expandedPid", QString::number(pid));
+            const QString confirm = qEnvironmentVariable("PERFMON_PREVIEW_CONFIRM");
+            if (confirm == QStringLiteral("term") || confirm == QStringLiteral("kill")) {
+                view.rootObject()->setProperty("pendingKillPid", pid);
+                view.rootObject()->setProperty("pendingKillForce", confirm == QStringLiteral("kill"));
+            }
+            std::fprintf(stderr, "EXPANDED pid=%d confirm=%s\n", pid, confirm.toUtf8().constData());
+        });
+        QTimer::singleShot(2600, &app, [&]() {
+            std::fprintf(stderr, "ROOT expandedPid=%s pending=%d\n",
+                         view.rootObject()->property("expandedPid").toString().toUtf8().constData(),
+                         view.rootObject()->property("pendingKillPid").toInt());
+            QList<QQuickItem *> rows;
+            collectItemsWithProperty(view.rootObject(), "pid", rows);
+            int expandedCount = 0;
+            for (QQuickItem *row : rows) {
+                if (!row->property("expanded").toBool()) {
+                    continue;
+                }
+                ++expandedCount;
+                std::fprintf(stderr, "ROW-EXPANDED pid=%d confirm=%d height=%.0f visible=%d\n",
+                             row->property("pid").toInt(),
+                             row->property("confirmPending").toBool(),
+                             row->height(), row->isVisible());
+            }
+            std::fprintf(stderr, "ROWS total=%lld expanded=%d\n", qint64(rows.size()), expandedCount);
+        });
+    }
 
     QTimer::singleShot(3000, &app, [&]() { grab(QStringLiteral("-1")); });
     QTimer::singleShot(9000, &app, [&]() {

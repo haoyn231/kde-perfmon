@@ -27,8 +27,51 @@ Item {
         ? verticalScrollBar.width
         : 0
 
+    property string expandedPid: ""
+    property int pendingKillPid: 0
+    property bool pendingKillForce: false
+    property string actionError: ""
+
+    function toggleExpanded(pid) {
+        const id = String(pid);
+        expandedPid = expandedPid === id ? "" : id;
+        pendingKillPid = 0;
+        actionError = "";
+    }
+
+    function requestProcessAction(pid, force) {
+        pendingKillPid = pid;
+        pendingKillForce = force;
+        actionError = "";
+    }
+
+    function cancelProcessAction() {
+        pendingKillPid = 0;
+    }
+
+    function confirmProcessAction() {
+        const pid = pendingKillPid;
+        const force = pendingKillForce;
+        pendingKillPid = 0;
+        if (pid <= 0) {
+            return;
+        }
+        actionError = force ? PerfBackend.killProcess(pid) : PerfBackend.terminateProcess(pid);
+        if (actionError.length === 0) {
+            PerfBackend.refresh();
+        }
+    }
+
     Component.onCompleted: if (visible) PerfBackend.processListActive = true
-    onVisibleChanged: if (visible) PerfBackend.processListActive = true
+    onVisibleChanged: {
+        if (visible) {
+            PerfBackend.processListActive = true;
+        } else {
+            expandedPid = "";
+            pendingKillPid = 0;
+            actionError = "";
+        }
+    }
 
     // The sampler resorts and resets the model every second, which makes the
     // view jump back to the top. Restore the scroll position after each reset
@@ -310,6 +353,16 @@ Item {
                     cpuColumnWidth: full.cpuColumnWidth
                     memoryColumnWidth: full.memoryColumnWidth
                     pidColumnWidth: full.pidColumnWidth
+
+                    expanded: full.expandedPid === String(pid)
+                    confirmPending: full.pendingKillPid === pid
+                    confirmForce: full.pendingKillForce
+                    actionError: full.expandedPid === String(pid) ? full.actionError : ""
+
+                    onToggleRequested: full.toggleExpanded(pid)
+                    onProcessActionRequested: (force) => full.requestProcessAction(pid, force)
+                    onActionConfirmed: full.confirmProcessAction()
+                    onActionCancelled: full.cancelProcessAction()
                 }
             }
 
