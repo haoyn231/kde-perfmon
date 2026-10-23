@@ -1,0 +1,2 @@
+module Hao.PerfMon
+plugin perfmonplugin

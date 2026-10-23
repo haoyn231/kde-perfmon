@@ -1,0 +1,4 @@
+build/
+dist/
+release-notes.md
+package/contents/lib/Hao/PerfMon/*.so

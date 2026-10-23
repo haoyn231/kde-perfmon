@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish ${{ github.ref_name }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag against package metadata
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if ! grep -q "\"Version\": \"${version}\"" package/metadata.json; then
+            echo "::error::package/metadata.json Version does not match tag ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          echo "Tag ${GITHUB_REF_NAME} matches metadata version ${version}"
+
+      - name: Build and test in Arch Linux
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src" \
+            -w /src \
+            archlinux:latest \
+            bash ci/arch-build.sh
+
+      - name: Package installable plasmoid
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          asset="kde-perfmon-${version}.tar.gz"
+
+          rm -rf dist
+          mkdir -p dist/org.hao.perfmon
+          cp -a package/. dist/org.hao.perfmon/
+          install -Dm755 build/libperfmonplugin.so \
+            dist/org.hao.perfmon/contents/lib/Hao/PerfMon/libperfmonplugin.so
+
+          tar -C dist -czf "${asset}" org.hao.perfmon
+          sha256sum "${asset}" > "${asset}.sha256"
+
+          echo "Packaged ${asset}"
+          tar -tzf "${asset}" | head -20
+
+      - name: Prepare release notes
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          if [ -f "docs/releases/${version}.md" ]; then
+            cp "docs/releases/${version}.md" release-notes.md
+          else
+            sed "s/@VERSION@/${version#v}/g" docs/releases/TEMPLATE.md > release-notes.md
+          fi
+
+          {
+            echo
+            echo "## Assets"
+            echo
+            echo "- \`kde-perfmon-${version}.tar.gz\` — ready-to-install Plasma 6 widget (includes the compiled QML plugin)."
+            echo "- \`kde-perfmon-${version}.tar.gz.sha256\` — SHA-256 checksum."
+            echo
+            echo '```bash'
+            echo "sha256sum -c kde-perfmon-${version}.tar.gz.sha256"
+            echo '```'
+          } >> release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: |
+            kde-perfmon-${{ github.ref_name }}.tar.gz
+            kde-perfmon-${{ github.ref_name }}.tar.gz.sha256
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false

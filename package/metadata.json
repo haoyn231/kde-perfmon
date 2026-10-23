@@ -1,0 +1,21 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "hao"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "CPU and memory usage in the panel with a sortable per-process popup",
+        "Description[zh_CN]": "在面板中显示 CPU 与内存占用，点开后可按 CPU 或内存排序查看进程占用",
+        "Icon": "utilities-system-monitor",
+        "Id": "org.hao.perfmon",
+        "License": "MIT",
+        "Name": "Performance Monitor",
+        "Name[zh_CN]": "性能监视器",
+        "Version": "1.0.0",
+        "Website": "https://github.com/haoyn231/kde-perfmon"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
