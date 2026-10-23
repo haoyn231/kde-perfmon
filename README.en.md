@@ -1,9 +1,26 @@
-# kde-perfmon · Performance Monitor
+<div align="center">
+  <h1 align="center">kde-perfmon</h1>
+  <p align="center">A KDE Plasma 6 panel performance monitor with CPU / memory preview, process list and system header</p>
+  <p align="center">English | <a href="README.md">中文</a></p>
 
-English | [中文](README.md)
+  <a href="https://github.com/haoyn231/kde-perfmon/releases/latest"><img src="https://img.shields.io/github/v/release/haoyn231/kde-perfmon?display_name=tag&label=Version&color=blue" alt="Version"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/Plasma-6-1D99F3" alt="KDE Plasma 6">
+  <img src="https://img.shields.io/badge/Qt-6.5%2B-41CD52" alt="Qt 6.5+">
+  <img src="https://img.shields.io/badge/C%2B%2B-17-00599C" alt="C++17">
+  <img src="https://img.shields.io/badge/Linux-x86__64-informational" alt="Linux x86_64">
+  <br>
+  <a href="https://github.com/haoyn231/kde-perfmon/actions/workflows/ci.yml"><img src="https://github.com/haoyn231/kde-perfmon/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/haoyn231/kde-perfmon/stargazers"><img src="https://img.shields.io/github/stars/haoyn231/kde-perfmon.svg" alt="GitHub stars"></a>
+</div>
 
-[![CI](https://github.com/haoyn231/kde-perfmon/actions/workflows/ci.yml/badge.svg)](https://github.com/haoyn231/kde-perfmon/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/haoyn231/kde-perfmon?display_name=tag)](https://github.com/haoyn231/kde-perfmon/releases)
+---
+
+<p align="center">
+  <img width="70%" src="./docs/images/screenshot.png" alt="kde-perfmon panel preview and process list">
+</p>
+
+<p align="center"><sub>Panel CPU / memory preview and the process list sorted by memory</sub></p>
 
 A KDE Plasma 6 panel widget (Plasmoid) that previews CPU and memory usage in the panel, and opens a sortable per-process list. The popup header shows the distro logo, distro name, hostname, user avatar and username. All colors follow the system light/dark color scheme.
 
