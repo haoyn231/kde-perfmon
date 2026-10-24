@@ -14,6 +14,10 @@ PlasmoidItem {
 
     compactRepresentation: CompactRepresentation {
         onActivated: (sortKey) => {
+            if (root.expanded) {
+                root.expanded = false;
+                return;
+            }
             PerfBackend.setSortKey(sortKey);
             root.expanded = true;
         }
