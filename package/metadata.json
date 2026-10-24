@@ -14,7 +14,7 @@
         "License": "MIT",
         "Name": "Performance Monitor",
         "Name[zh_CN]": "性能监视器",
-        "Version": "1.0.1",
+        "Version": "1.0.2",
         "Website": "https://github.com/haoyn231/kde-perfmon"
     },
     "X-Plasma-API-Minimum-Version": "6.0"
