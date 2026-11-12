@@ -27,6 +27,10 @@ public:
 
     void setProcesses(QVector<ProcessInfo> processes);
 
+    // Removes a single row in place (no model reset), so the surviving rows keep
+    // their order and the view keeps its scroll position.
+    bool removePid(int pid);
+
 private:
     QVector<ProcessInfo> m_processes;
 };

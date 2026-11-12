@@ -1,6 +1,7 @@
 // Development tool: renders the real popup QML with the real backend into PNG
 // frames so the UI can be inspected without a running panel. It also reports
 // the Kirigami colors before and after the system color scheme changes.
+#include <QAbstractItemModel>
 #include <QGuiApplication>
 #include <QImage>
 #include <QQmlComponent>
@@ -10,6 +11,7 @@
 #include <QQuickView>
 #include <QTest>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include <cstdio>
 
@@ -74,6 +76,37 @@ QQuickItem *topmostProcessRow(QQuickItem *root)
         }
     }
     return best;
+}
+
+qreal listContentY(QQuickItem *list)
+{
+    return list ? list->property("contentY").toDouble() : -1.0;
+}
+
+// Highest CPU value in the model: proves a frozen frame kept live numbers
+// instead of the zeroed rows a fresh sampling window produces.
+double maxProcessCpu(QQuickItem *list)
+{
+    auto *model = list ? qobject_cast<QAbstractItemModel *>(list->property("model").value<QObject *>()) : nullptr;
+    if (!model) {
+        return -1.0;
+    }
+    double best = 0.0;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        best = qMax(best, model->index(row, 0).data(Qt::UserRole + 5).toDouble());
+    }
+    return best;
+}
+
+// One mouse-wheel notch, delivered to the view like a real wheel event.
+void sendWheelNotch(QQuickView *view, QQuickItem *list, int notches)
+{
+    const QPointF origin = list->mapToScene(QPointF(0, 0));
+    const QPointF target = origin + QPointF(list->width() / 2, list->height() / 2);
+    QWheelEvent event(target, view->mapToGlobal(target.toPoint()), QPoint(),
+                      QPoint(0, -120 * notches), Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(view, &event);
 }
 
 } // namespace
@@ -150,22 +183,6 @@ int main(int argc, char **argv)
                          pos.x(), pos.y(), scrollBar->width(), scrollBar->height(), scrollBar->isVisible());
         }
     };
-
-    QTimer::singleShot(4000, &app, [&]() {
-        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
-        if (list) {
-            list->setProperty("contentY", 600.0);
-            std::fprintf(stderr, "SCROLL set=%.0f\n", list->property("contentY").toDouble());
-        }
-    });
-    QTimer::singleShot(6500, &app, [&]() {
-        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
-        if (list) {
-            std::fprintf(stderr, "SCROLL after-two-resets=%.0f count=%d\n",
-                         list->property("contentY").toDouble(),
-                         list->property("count").toInt());
-        }
-    });
 
     if (qEnvironmentVariableIsSet("PERFMON_PREVIEW_CLICK")) {
         QTimer::singleShot(1800, &app, [&]() {
@@ -259,9 +276,82 @@ int main(int argc, char **argv)
         });
     }
 
-    QTimer::singleShot(3000, &app, [&]() { grab(QStringLiteral("-1")); });
-    QTimer::singleShot(9000, &app, [&]() {
+    // Scroll / freeze / back-to-top scenario. Each step reports what the user
+    // would see, so a regression shows up as a changed log line or a changed
+    // frame instead of having to be spotted by hand.
+    int modelResets = 0;
+    int resetsWhenFrozen = -1;
+
+    QTimer::singleShot(3000, &app, [&]() {
+        grab(QStringLiteral("-1"));
+        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+        if (list) {
+            if (auto *model = qobject_cast<QAbstractItemModel *>(list->property("model").value<QObject *>())) {
+                QObject::connect(model, &QAbstractItemModel::modelReset, &app, [&modelResets]() { ++modelResets; });
+            }
+            std::fprintf(stderr, "LIVE contentY=%.0f resets=%d max-cpu=%.2f\n", listContentY(list), modelResets,
+                     maxProcessCpu(list));
+        }
+    });
+
+    QTimer::singleShot(4000, &app, [&]() {
+        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+        if (!list) {
+            return;
+        }
+        list->setProperty("contentY", 600.0);
+        QQuickItem *badge = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("pausedBadge"));
+        std::fprintf(stderr, "SCROLL set=%.0f paused-badge=%d\n", listContentY(list),
+                     badge ? badge->isVisible() : -1);
+        resetsWhenFrozen = modelResets;
+    });
+
+    QTimer::singleShot(5000, &app, [&]() {
+        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+        if (!list) {
+            return;
+        }
+        const qreal before = listContentY(list);
+        sendWheelNotch(&view, list, 3);
+        std::fprintf(stderr, "WHEEL 3-notches %.0f -> %.0f\n", before, listContentY(list));
+    });
+
+    QTimer::singleShot(6500, &app, [&]() {
+        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+        if (!list) {
+            return;
+        }
+        QQuickItem *badge = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("pausedBadge"));
+        QQuickItem *button = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("backToTopButton"));
+        std::fprintf(stderr, "FROZEN contentY=%.0f resets-since-pause=%d paused-badge=%d back-to-top=%d max-cpu=%.2f\n",
+                     listContentY(list), modelResets - resetsWhenFrozen,
+                     badge ? badge->isVisible() : -1, button ? button->isVisible() : -1,
+                     maxProcessCpu(list));
         grab(QStringLiteral("-2"));
+    });
+
+    QTimer::singleShot(7200, &app, [&]() {
+        QQuickItem *button = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("backToTopButton"));
+        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+        if (!button || !list) {
+            std::fprintf(stderr, "BACK-TO-TOP skipped: no button/list\n");
+            return;
+        }
+        const QPoint click = button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).toPoint();
+        QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, click);
+        std::fprintf(stderr, "BACK-TO-TOP clicked at=%d,%d contentY=%.0f\n", click.x(), click.y(),
+                     listContentY(list));
+    });
+
+    QTimer::singleShot(8200, &app, [&]() {
+        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+        QQuickItem *badge = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("pausedBadge"));
+        std::fprintf(stderr, "RESUMED contentY=%.0f resets=%d paused-badge=%d\n",
+                     listContentY(list), modelResets, badge ? badge->isVisible() : -1);
+    });
+
+    QTimer::singleShot(9000, &app, [&]() {
+        grab(QStringLiteral("-3"));
         app.quit();
     });
     return app.exec();

@@ -19,6 +19,8 @@ private Q_SLOTS:
     void processCpuMath();
     void sortByCpuAndMemory();
     void liveSampling();
+    void processListPause();
+    void removeProcess();
     void processSignals();
 };
 
@@ -179,6 +181,66 @@ void PerfTest::liveSampling()
     QCOMPARE(backend.sortKey(), QStringLiteral("memory"));
     QVERIFY(!backend.sortAscending());
     QVERIFY(verifySorted(true, false));
+}
+
+void PerfTest::processListPause()
+{
+    PerfBackend backend;
+    backend.setProcessListActive(true);
+    QTRY_VERIFY_WITH_TIMEOUT(backend.processCount() > 0, 3000);
+
+    QAbstractListModel *model = backend.processModel();
+    QSignalSpy resetSpy(model, &QAbstractItemModel::modelReset);
+    QSignalSpy statsSpy(&backend, &PerfBackend::statsChanged);
+    QVERIFY(!backend.processListPaused());
+
+    backend.setProcessListPaused(true);
+    QVERIFY(backend.processListPaused());
+    const int frozenCount = backend.processCount();
+    resetSpy.clear();
+    statsSpy.clear();
+
+    QTest::qWait(1400);
+
+    // The table is a still frame: no rescan, no resort, no row moves.
+    QCOMPARE(resetSpy.count(), 0);
+    QCOMPARE(backend.processCount(), frozenCount);
+    // The machine totals keep ticking while the table is frozen.
+    QVERIFY2(statsSpy.count() >= 1, "CPU / memory stats must keep updating while paused");
+
+    backend.setProcessListPaused(false);
+    QVERIFY(!backend.processListPaused());
+    QVERIFY2(resetSpy.count() >= 1, "resuming must rescan immediately");
+
+    // Opening the popup clears a stale freeze, so a destroyed QML item can
+    // never leave the list permanently stuck.
+    backend.setProcessListPaused(true);
+    backend.setProcessListActive(false);
+    backend.setProcessListActive(true);
+    QVERIFY(!backend.processListPaused());
+}
+
+void PerfTest::removeProcess()
+{
+    PerfBackend backend;
+    backend.setProcessListActive(true);
+    QTRY_VERIFY_WITH_TIMEOUT(backend.processCount() > 0, 3000);
+
+    QAbstractListModel *model = backend.processModel();
+    const int pid = model->index(0, 0).data(ProcessModel::PidRole).toInt();
+    const int before = backend.processCount();
+    QSignalSpy countSpy(&backend, &PerfBackend::processCountChanged);
+
+    QVERIFY(backend.removeProcess(pid));
+    QCOMPARE(backend.processCount(), before - 1);
+    QCOMPARE(countSpy.count(), 1);
+    for (int row = 0; row < model->rowCount(); ++row) {
+        QVERIFY(model->index(row, 0).data(ProcessModel::PidRole).toInt() != pid);
+    }
+
+    QVERIFY(!backend.removeProcess(pid));
+    QVERIFY(!backend.removeProcess(-1));
+    QCOMPARE(backend.processCount(), before - 1);
 }
 
 void PerfTest::processSignals()

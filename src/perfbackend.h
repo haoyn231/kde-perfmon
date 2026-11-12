@@ -21,6 +21,7 @@ class PerfBackend : public QObject
     Q_PROPERTY(int cpuCount READ cpuCount CONSTANT)
     Q_PROPERTY(QAbstractListModel *processModel READ processModel CONSTANT)
     Q_PROPERTY(bool processListActive READ processListActive WRITE setProcessListActive NOTIFY processListActiveChanged)
+    Q_PROPERTY(bool processListPaused READ processListPaused WRITE setProcessListPaused NOTIFY processListPausedChanged)
     Q_PROPERTY(QString sortKey READ sortKey NOTIFY sortChanged)
     Q_PROPERTY(bool sortAscending READ sortAscending NOTIFY sortChanged)
     Q_PROPERTY(QString distroName READ distroName CONSTANT)
@@ -47,6 +48,14 @@ public:
     bool processListActive() const { return m_processListActive; }
     void setProcessListActive(bool active);
 
+    // While paused the process table is a still frame: /proc is still sampled
+    // for the machine totals, but the rows are neither rescanned nor re-sorted,
+    // so the list stops moving under the pointer. The popup drives this from
+    // the scroll position: scrolling away from the top pauses, returning to the
+    // top resumes.
+    bool processListPaused() const { return m_processListPaused; }
+    void setProcessListPaused(bool paused);
+
     QString sortKey() const { return m_sortKey; }
     bool sortAscending() const { return m_sortAscending; }
 
@@ -68,6 +77,10 @@ public:
     Q_INVOKABLE QString terminateProcess(int pid);
     Q_INVOKABLE QString killProcess(int pid);
 
+    // Drops one row without touching the rest, so a killed process disappears
+    // even while the table is paused. Returns false when the PID is not listed.
+    Q_INVOKABLE bool removeProcess(int pid);
+
 public Q_SLOTS:
     void refresh();
 
@@ -75,6 +88,7 @@ Q_SIGNALS:
     void statsChanged();
     void processCountChanged();
     void processListActiveChanged();
+    void processListPausedChanged();
     void sortChanged();
 
 private:
@@ -107,6 +121,7 @@ private:
     QString m_sortKey = QStringLiteral("cpu");
     bool m_sortAscending = false;
     bool m_processListActive = false;
+    bool m_processListPaused = false;
 
     int m_cpuCount = 1;
     int m_clockTicks = 100;

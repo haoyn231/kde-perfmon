@@ -20,17 +20,55 @@ Item {
     readonly property real memoryColumnWidth: Kirigami.Units.gridUnit * 5.2
     readonly property real pidColumnWidth: Kirigami.Units.gridUnit * 3.8
 
-    property real savedScrollY: 0
+    // Opaque tint of the popup background towards the text color: the floating
+    // button must stay readable while rows scroll behind it.
+    function tintedBackground(amount) {
+        return Qt.rgba(
+            Kirigami.Theme.backgroundColor.r * (1 - amount) + Kirigami.Theme.textColor.r * amount,
+            Kirigami.Theme.backgroundColor.g * (1 - amount) + Kirigami.Theme.textColor.g * amount,
+            Kirigami.Theme.backgroundColor.b * (1 - amount) + Kirigami.Theme.textColor.b * amount,
+            1);
+    }
+
     // Overlay scrollbars sit on top of the view; reserve their width so the
     // PID column stays readable instead of ending underneath the handle.
     readonly property real scrollbarWidth: verticalScrollBar.visible
         ? verticalScrollBar.width
         : 0
 
+    // Distance covered by one mouse-wheel notch; a notch is 120 units.
+    readonly property real wheelStep: Kirigami.Units.gridUnit * 2.5
+    // Anything above this counts as "scrolled away from the top".
+    readonly property real topSnap: 1.0
+
     property string expandedPid: ""
     property int pendingKillPid: 0
     property bool pendingKillForce: false
     property string actionError: ""
+
+    // The table only follows the sampler while it is pinned to the top. As soon
+    // as the reader scrolls away the rows freeze, because a list that re-sorts
+    // itself every second cannot be read or clicked reliably.
+    function syncLiveState() {
+        PerfBackend.processListPaused = processList.contentY > topSnap;
+    }
+
+    function scrollToTop() {
+        if (processList.contentY <= topSnap) {
+            processList.contentY = 0;
+            syncLiveState();
+            return;
+        }
+        scrollToTopAnimation.restart();
+    }
+
+    // Sorting rebuilds the model, so show the top of the new order and resume
+    // live updates instead of leaving the view at an arbitrary offset.
+    function resetViewToTop() {
+        scrollToTopAnimation.stop();
+        processList.contentY = 0;
+        syncLiveState();
+    }
 
     function toggleExpanded(pid) {
         const id = String(pid);
@@ -58,34 +96,49 @@ Item {
         }
         actionError = force ? PerfBackend.killProcess(pid) : PerfBackend.terminateProcess(pid);
         if (actionError.length === 0) {
+            // Drop the row immediately; the next scan would not happen at all
+            // while the table is frozen.
+            PerfBackend.removeProcess(pid);
             PerfBackend.refresh();
         }
     }
 
-    Component.onCompleted: if (visible) PerfBackend.processListActive = true
+    Component.onCompleted: {
+        if (visible) {
+            PerfBackend.processListActive = true;
+        }
+        syncLiveState();
+    }
     onVisibleChanged: {
         if (visible) {
             PerfBackend.processListActive = true;
+            syncLiveState();
         } else {
             expandedPid = "";
             pendingKillPid = 0;
             actionError = "";
+            resetViewToTop();
         }
     }
 
-    // The sampler resorts and resets the model every second, which makes the
-    // view jump back to the top. Restore the scroll position after each reset
-    // so the popup stays usable while values keep updating.
+    // Drives the floating "back to top" button; stops as soon as the reader
+    // grabs the list, the wheel or the scrollbar again.
+    NumberAnimation {
+        id: scrollToTopAnimation
+        target: processList
+        property: "contentY"
+        to: 0
+        duration: Kirigami.Units.longDuration
+        easing.type: Easing.OutCubic
+    }
+
     Connections {
-        target: PerfBackend.processModel
-        function onModelAboutToBeReset() {
-            full.savedScrollY = processList.contentY;
+        target: processList
+        function onContentYChanged() {
+            full.syncLiveState();
         }
-        function onModelReset() {
-            Qt.callLater(function() {
-                const maxY = Math.max(0, processList.contentHeight - processList.height);
-                processList.contentY = Math.min(full.savedScrollY, maxY);
-            });
+        function onMovementStarted() {
+            scrollToTopAnimation.stop();
         }
     }
 
@@ -231,6 +284,40 @@ Item {
                 font: Kirigami.Theme.smallFont
             }
 
+            RowLayout {
+                id: pausedBadge
+                objectName: "pausedBadge"
+
+                // Only shown while the rows are frozen, so the still table is
+                // never mistaken for a system that stopped changing.
+                visible: PerfBackend.processListPaused
+                spacing: Kirigami.Units.smallSpacing / 1.5
+
+                // A plain dot instead of a theme icon: symbolic icon colors are
+                // not reliable across icon themes, and the state has to read as
+                // one unit next to its label.
+                Rectangle {
+                    implicitWidth: Kirigami.Units.smallSpacing * 1.2
+                    implicitHeight: implicitWidth
+                    radius: width / 2
+                    color: Kirigami.Theme.neutralTextColor
+                }
+
+                Text {
+                    text: i18n("Paused")
+                    color: Kirigami.Theme.neutralTextColor
+                    font: Kirigami.Theme.smallFont
+                }
+
+                HoverHandler {
+                    id: pausedHover
+                }
+
+                QQC2.ToolTip.visible: pausedHover.hovered
+                QQC2.ToolTip.delay: 400
+                QQC2.ToolTip.text: i18n("Rows stop updating once you scroll away. Scroll back to the top to go live again.")
+            }
+
             Item {
                 Layout.fillWidth: true
             }
@@ -238,13 +325,19 @@ Item {
             SortChip {
                 text: i18n("CPU")
                 active: PerfBackend.sortKey === "cpu"
-                onClicked: PerfBackend.toggleSort("cpu")
+                onClicked: {
+                    full.resetViewToTop();
+                    PerfBackend.toggleSort("cpu");
+                }
             }
 
             SortChip {
                 text: i18n("Memory")
                 active: PerfBackend.sortKey === "memory"
-                onClicked: PerfBackend.toggleSort("memory")
+                onClicked: {
+                    full.resetViewToTop();
+                    PerfBackend.toggleSort("memory");
+                }
             }
 
             Rectangle {
@@ -270,7 +363,10 @@ Item {
 
                 TapHandler {
                     acceptedButtons: Qt.LeftButton
-                    onTapped: PerfBackend.toggleSort(PerfBackend.sortKey)
+                    onTapped: {
+                        full.resetViewToTop();
+                        PerfBackend.toggleSort(PerfBackend.sortKey);
+                    }
                 }
 
                 Accessible.role: Accessible.Button
@@ -346,6 +442,29 @@ Item {
                     id: verticalScrollBar
                     objectName: "processScrollBar"
                     policy: QQC2.ScrollBar.AsNeeded
+
+                    onPressedChanged: {
+                        if (pressed) {
+                            scrollToTopAnimation.stop();
+                        }
+                    }
+                }
+
+                // Flickable's own wheel handling stops accepting events after the
+                // first notch, which made the wheel feel dead. Scrolling is
+                // driven explicitly here for both the wheel and the touchpad,
+                // including while the pointer sits on the scrollbar handle.
+                WheelHandler {
+                    id: listWheel
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                    onWheel: (wheel) => {
+                        scrollToTopAnimation.stop();
+                        const maxY = Math.max(0, processList.contentHeight - processList.height);
+                        const delta = wheel.pixelDelta.y !== 0
+                            ? wheel.pixelDelta.y
+                            : (wheel.angleDelta.y / 120) * full.wheelStep;
+                        processList.contentY = Math.max(0, Math.min(maxY, processList.contentY - delta));
+                    }
                 }
 
                 delegate: ProcessRow {
@@ -364,6 +483,52 @@ Item {
                     onActionConfirmed: full.confirmProcessAction()
                     onActionCancelled: full.cancelProcessAction()
                 }
+            }
+
+            // Floating shortcut back to the live top of the list; it only shows
+            // up while the reader is scrolled away.
+            Rectangle {
+                id: backToTopButton
+                objectName: "backToTopButton"
+
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.rightMargin: Kirigami.Units.smallSpacing + full.scrollbarWidth
+                anchors.bottomMargin: Kirigami.Units.smallSpacing
+                width: Kirigami.Units.gridUnit * 1.9
+                height: width
+                radius: width / 2
+                visible: processList.contentY > full.topSnap
+                color: full.tintedBackground(backToTopHover.hovered ? 0.22 : 0.14)
+                border.width: 1
+                border.color: full.dividerColor
+
+                Kirigami.Icon {
+                    anchors.centerIn: parent
+                    source: "go-up-symbolic"
+                    implicitWidth: Kirigami.Units.iconSizes.smallMedium
+                    implicitHeight: Kirigami.Units.iconSizes.smallMedium
+                    color: Kirigami.Theme.textColor
+                }
+
+                HoverHandler {
+                    id: backToTopHover
+                    cursorShape: Qt.PointingHandCursor
+                }
+
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onTapped: full.scrollToTop()
+                }
+
+                Accessible.role: Accessible.Button
+                Accessible.name: i18n("Back to top")
+                Accessible.description: i18n("Resume live updates")
+                Accessible.onPressAction: full.scrollToTop()
+
+                QQC2.ToolTip.visible: backToTopHover.hovered
+                QQC2.ToolTip.delay: 600
+                QQC2.ToolTip.text: i18n("Back to top")
             }
 
             Text {

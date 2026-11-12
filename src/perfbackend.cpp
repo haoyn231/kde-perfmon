@@ -218,9 +218,36 @@ void PerfBackend::setProcessListActive(bool active)
         // instead of averaged over the time the popup was closed.
         m_previousTicks.clear();
         m_previousProcessSampleMs = -1;
+        // A fresh popup always starts pinned to the top, so it starts live even
+        // if the QML item was destroyed while the table was frozen.
+        if (m_processListPaused) {
+            m_processListPaused = false;
+            Q_EMIT processListPausedChanged();
+        }
         refresh();
     }
     Q_EMIT processListActiveChanged();
+}
+
+void PerfBackend::setProcessListPaused(bool paused)
+{
+    if (m_processListPaused == paused) {
+        return;
+    }
+    m_processListPaused = paused;
+    const bool resuming = !paused && m_processListActive;
+    if (resuming) {
+        // Resume from a fresh delta window: ticks accumulated while frozen would
+        // otherwise be reported as CPU usage averaged over the whole pause.
+        m_previousTicks.clear();
+        m_previousProcessSampleMs = -1;
+    }
+    // Notify before rescanning, so the UI is out of its "paused" state by the
+    // time the rows change.
+    Q_EMIT processListPausedChanged();
+    if (resuming) {
+        refresh();
+    }
 }
 
 void PerfBackend::setSortKey(const QString &key)
@@ -260,6 +287,15 @@ QString PerfBackend::terminateProcess(int pid)
 QString PerfBackend::killProcess(int pid)
 {
     return signalProcess(pid, SIGKILL, true);
+}
+
+bool PerfBackend::removeProcess(int pid)
+{
+    if (!m_model.removePid(pid)) {
+        return false;
+    }
+    Q_EMIT processCountChanged();
+    return true;
 }
 
 void PerfBackend::resort()
@@ -307,7 +343,9 @@ void PerfBackend::refresh()
 
     readMemory();
 
-    if (m_processListActive) {
+    // A paused table keeps its rows exactly as they are: rescans would resort
+    // the model and yank the view out from under the reader.
+    if (m_processListActive && !m_processListPaused) {
         scanProcesses(nowMs);
     }
 

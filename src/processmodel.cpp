@@ -57,3 +57,17 @@ void ProcessModel::setProcesses(QVector<ProcessInfo> processes)
     m_processes = std::move(processes);
     endResetModel();
 }
+
+bool ProcessModel::removePid(int pid)
+{
+    for (int row = 0; row < m_processes.size(); ++row) {
+        if (m_processes.at(row).pid != pid) {
+            continue;
+        }
+        beginRemoveRows(QModelIndex(), row, row);
+        m_processes.removeAt(row);
+        endRemoveRows();
+        return true;
+    }
+    return false;
+}
