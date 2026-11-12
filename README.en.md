@@ -34,7 +34,9 @@ Inspired by [DankMaterialShell (DMS)](https://github.com/AvengeMedia/DankMateria
 - `CPU` / `Memory` sort chips; click the active chip again to flip ascending/descending; the arrow button does the same
 - Process rows: name, full command line (elided), CPU%, RSS, PID — no process icons
 - Click a row to expand the full command, PPID and memory percentage, then send SIGTERM or SIGKILL (force kill only for PIDs above 1000, with an inline confirmation)
-- Scroll position is preserved across the 1-second list refresh; the PID column is not covered by the overlay scrollbar
+- The list refreshes live only while it is pinned to the top; scrolling away freezes it into a still table and shows `Paused` next to the title, so rows never re-sort under the pointer
+- A round "back to top" button appears in the bottom-right corner when scrolled away; it returns to the top and resumes live updates
+- Wheel and touchpad scrolling is handled explicitly instead of relying on Flickable's built-in wheel logic (about 2.5 gridUnits per notch); the PID column is not covered by the overlay scrollbar
 - When the popup is closed only total CPU/memory are sampled; `/proc/<pid>` scanning is disabled
 - Everything is bound to `Kirigami.Theme`, so light/dark switches apply live
 
@@ -47,12 +49,12 @@ The release archive contains a **prebuilt** plugin; no compiler is needed.
 1. Requirements: KDE Plasma 6 (Qt 6.5+), Kirigami (shipped with Plasma). The release is built on Arch Linux / Plasma 6.8 / Qt 6.12. If the plugin fails to load on another distribution, use Option 2 and build from source.
 2. Download `kde-perfmon-vX.Y.Z.tar.gz` and the matching `.sha256` from [Releases](https://github.com/haoyn231/kde-perfmon/releases), then verify:
    ```bash
-   sha256sum -c kde-perfmon-v1.0.2.tar.gz.sha256
+   sha256sum -c kde-perfmon-v1.0.3.tar.gz.sha256
    ```
 3. Extract it into your user Plasma widget directory:
    ```bash
    mkdir -p ~/.local/share/plasma/plasmoids
-   tar -xzf kde-perfmon-v1.0.2.tar.gz -C ~/.local/share/plasma/plasmoids
+   tar -xzf kde-perfmon-v1.0.3.tar.gz -C ~/.local/share/plasma/plasmoids
    ```
    You should then have:
    ```
@@ -101,7 +103,12 @@ Then add the widget to the panel as described in Option 1, step 5.
   - click `CPU` / `Memory` to change the sort column;
   - click the active column again to flip ascending/descending;
   - the arrow button flips the current sort direction;
-  - use the mouse wheel to scroll the process list.
+  - scroll the process list with the mouse wheel over it, or with a touchpad two-finger gesture.
+- Live updates only happen at the very top:
+  - pinned to the top, the list refreshes every second;
+  - as soon as you scroll down (wheel, scrollbar drag or flick) the table freezes and a `Paused` marker appears next to the title, while the CPU / memory summary keeps updating;
+  - the round button in the bottom-right corner jumps back to the top and resumes live updates;
+  - changing the sort column while frozen also returns to the top and goes live again.
 - Click a process row to expand or collapse it:
   - the expanded view shows the full command line, `PPID` and memory percentage;
   - `Terminate` sends SIGTERM, `Force kill` sends SIGKILL (PIDs above 1000 only);
@@ -121,6 +128,13 @@ One sample per second, read entirely from `/proc`, with no background daemon:
 | Swap | `SwapTotal - SwapFree` |
 
 Sorting matches DMS: changing columns starts descending; clicking the active column flips direction; ties are broken by ascending PID.
+
+### Refresh and freeze
+
+- Total CPU / memory: updated every second whenever the popup is open, independent of the table.
+- Process table: rescanned and re-sorted every second only while the popup is open **and** the list is pinned to the top. Scrolling down freezes it — `/proc` is no longer scanned for processes and the model is no longer reset.
+- Popup closed: both are dialed back; only the machine totals are sampled and processes are not scanned at all.
+- Returning to the top starts a fresh sampling window, so the first frame after resuming may report close to 0% per process and is correct again one second later. That is the price of not averaging the paused period into the CPU percentage.
 
 ## System header
 
@@ -153,7 +167,9 @@ cmake --build build -j"$(nproc)"
 # QML lint (on Arch the Qt 6 binary is /usr/lib/qt6/bin/qmllint)
 /usr/lib/qt6/bin/qmllint -I package/contents/lib package/contents/ui/*.qml
 
-# render the real popup QML to PNG without a panel (prints texts and theme colors)
+# render the real popup QML to PNG without a panel (prints texts and theme colors,
+# and replays the scroll / freeze / wheel / back-to-top scenario as LIVE, SCROLL,
+# WHEEL, FROZEN, BACK-TO-TOP and RESUMED lines)
 QT_QPA_PLATFORMTHEME=KDE QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
     ./build/perfmon-preview package/contents/ui/FullRepresentation.qml /tmp/preview
 ```

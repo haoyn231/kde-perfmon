@@ -34,7 +34,9 @@ KDE Plasma 6 面板小程序（Plasmoid）：在菜单栏预览 CPU 与内存占
 - 弹窗内提供 `CPU` / `Memory` 排序按钮，再点当前按钮切换升/降序，箭头按钮也可切换
 - 进程行：名称、完整命令行（省略显示）、CPU%、RSS、PID（不显示进程图标）
 - 点击进程行展开完整命令行、PPID 与内存占比，可发送 SIGTERM 或 SIGKILL（强制终止仅对 PID > 1000 开放，操作前需确认）
-- 弹窗列表每秒刷新时保持滚动位置；PID 列不会被叠加式滚动条遮挡
+- 列表只在滚动到最顶上时实时刷新；一旦向下滚动就冻结成静态表格，标题旁显示 `Paused`，避免每秒重排打断阅读
+- 冻结时右下角出现圆形「回到顶部」按钮，点击回到顶部并自动恢复实时刷新
+- 鼠标滚轮与触控板滚动自己处理（不依赖 Flickable 内建行为），每格约 2.5 个 gridUnit；PID 列不会被叠加式滚动条遮挡
 - 弹窗关闭时只采样整机 CPU / 内存，不扫描进程，降低开销
 - 全部颜色绑定 `Kirigami.Theme`，明暗配色切换即时生效
 
@@ -47,12 +49,12 @@ Release 包内是**已经编译好**的插件，普通用户不需要安装编�
 1. 系统要求：KDE Plasma 6（Qt 6.5+）、Kirigami（Plasma 自带）。发布包在 Arch Linux / Plasma 6.8 / Qt 6.12 上构建；其它发行版如果插件加载失败，请改用「方式二」从源码构建。
 2. 从 [Releases](https://github.com/haoyn231/kde-perfmon/releases) 下载 `kde-perfmon-vX.Y.Z.tar.gz` 和对应的 `.sha256` 文件，并校验：
    ```bash
-   sha256sum -c kde-perfmon-v1.0.2.tar.gz.sha256
+   sha256sum -c kde-perfmon-v1.0.3.tar.gz.sha256
    ```
 3. 解压到当前用户的 Plasma 小程序目录：
    ```bash
    mkdir -p ~/.local/share/plasma/plasmoids
-   tar -xzf kde-perfmon-v1.0.2.tar.gz -C ~/.local/share/plasma/plasmoids
+   tar -xzf kde-perfmon-v1.0.3.tar.gz -C ~/.local/share/plasma/plasmoids
    ```
    解压后应存在：
    ```
@@ -101,7 +103,12 @@ systemctl --user restart plasma-plasmashell.service
   - 点击 `CPU` / `Memory` 切换排序列；
   - 再次点击当前列，切换升序 / 降序；
   - 右侧箭头按钮切换当前列的排序方向；
-  - 鼠标滚轮滚动进程列表。
+  - 鼠标滚轮悬浮滚动进程列表，触控板双指滚动同样生效。
+- 列表的实时刷新只在最顶端生效：
+  - 停在最顶上时每秒刷新，数值一直在动；
+  - 一旦向下滚动（滚轮、拖动滚动条或拖拽列表），表格立即冻结，标题旁出现 `Paused` 提示，此时 CPU / 内存总览仍然每秒更新；
+  - 右下角圆形按钮可一键回到顶部，回到顶部后自动恢复实时刷新；
+  - 冻结期间切换排序列会回到顶部并重新进入实时状态。
 - 点击进程行展开 / 折叠：
   - 展开后显示完整命令行、`PPID` 与内存占比；
   - `Terminate` 发送 SIGTERM，`Force kill` 发送 SIGKILL（仅 PID > 1000）；
@@ -121,6 +128,13 @@ systemctl --user restart plasma-plasmashell.service
 | 交换分区 | `SwapTotal - SwapFree` |
 
 排序规则与 DMS 一致：切换列时从降序开始，再点同一列切换方向；数值相同时按 PID 升序。
+
+### 刷新与冻结
+
+- 整机 CPU / 内存：弹窗打开时始终每秒更新，与列表是否冻结无关。
+- 进程表：只有在弹窗打开**且**列表停在最顶端时才每秒重扫 `/proc` 并重排；向下滚动后冻结，不再扫描进程，也不再重置模型。
+- 弹窗关闭时两者都降级：只保留整机 CPU / 内存采样，完全不扫描进程。
+- 从冻结回到顶部时会重新建立采样基线，因此恢复后的第一帧进程 CPU 可能接近 0%，下一秒即恢复真实值——这是「不把暂停期间的时间摊进平均值」的代价。
 
 ## 系统信息头
 
@@ -153,7 +167,9 @@ cmake --build build -j"$(nproc)"
 # QML 静态检查（Arch 上 Qt6 版位于 /usr/lib/qt6/bin/qmllint）
 /usr/lib/qt6/bin/qmllint -I package/contents/lib package/contents/ui/*.qml
 
-# 不依赖面板，直接把真实弹窗 QML 渲染成 PNG（同时打印文本与主题颜色）
+# 不依赖面板，直接把真实弹窗 QML 渲染成 PNG（同时打印文本与主题颜色，
+# 并回放「滚动 → 冻结 → 滚轮 → 回到顶部」场景，输出 LIVE / SCROLL / WHEEL /
+# FROZEN / BACK-TO-TOP / RESUMED 检查行）
 QT_QPA_PLATFORMTHEME=KDE QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
     ./build/perfmon-preview package/contents/ui/FullRepresentation.qml /tmp/preview
 ```
