@@ -20,7 +20,7 @@
   <img width="70%" src="./docs/images/screenshot.png" alt="kde-perfmon panel preview and process list">
 </p>
 
-<p align="center"><sub>Panel CPU / memory preview and the process list sorted by memory</sub></p>
+<p align="center"><sub>The popup: live CPU package power, the per-core load strip and the sortable process list</sub></p>
 
 A KDE Plasma 6 panel widget (Plasmoid) that previews CPU and memory usage in the panel, and opens a sortable per-process list. The popup header shows the distro logo, distro name, hostname, user avatar and username. All colors follow the system light/dark color scheme.
 

@@ -20,7 +20,7 @@
   <img width="70%" src="./docs/images/screenshot.png" alt="kde-perfmon 面板预览与进程列表">
 </p>
 
-<p align="center"><sub>面板中的 CPU / 内存预览，以及按内存排序的进程列表</sub></p>
+<p align="center"><sub>弹窗：CPU 整包功耗、每核负载横带与排序后的进程列表</sub></p>
 
 KDE Plasma 6 面板小程序（Plasmoid）：在菜单栏预览 CPU 与内存占用，点开后查看每个进程的占用，并可按 CPU 或内存排序。顶部展示发行版 logo、发行版名、主机名、用户头像与用户名，配色完全跟随系统明暗主题。
 
