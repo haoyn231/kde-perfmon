@@ -11,6 +11,7 @@
 #include <QUrl>
 
 #include <cerrno>
+#include <cmath>
 #include <csignal>
 #include <cstring>
 #include <pwd.h>
@@ -164,6 +165,16 @@ PerfBackend::PerfBackend(QObject *parent)
     m_clockTicks = clockTicks > 0 ? int(clockTicks) : 100;
     const long pageSize = sysconf(_SC_PAGESIZE);
     m_pageSize = pageSize > 0 ? quint64(pageSize) : 4096;
+
+    // Physical cores are only a nicety for the card subtitle: hybrid parts
+    // report a different thread count, and the per-core strip always follows
+    // the cpuN lines of /proc/stat.
+    QFile cpuInfo(QStringLiteral("/proc/cpuinfo"));
+    if (cpuInfo.open(QIODevice::ReadOnly)) {
+        m_physicalCpuCount = countPhysicalCores(cpuInfo.readAll());
+    }
+
+    resolvePowerSource();
 
     const QHash<QString, QString> osRelease = readOsRelease();
     m_distroName = osRelease.value(QStringLiteral("NAME"));
@@ -326,20 +337,46 @@ void PerfBackend::refresh()
 {
     const qint64 nowMs = m_clock.elapsed();
 
+    // One pass over /proc/stat gives both the machine total and every cpuN
+    // line, so the per-core strip costs nothing extra.
+    QVector<CpuTimes> cores;
     CpuTimes currentCpu;
+    bool haveAggregate = false;
     QFile statFile(QStringLiteral("/proc/stat"));
-    if (statFile.open(QIODevice::ReadOnly) && parseCpuTimesLine(statFile.readLine(), &currentCpu)) {
-        if (m_havePreviousCpu) {
-            const quint64 deltaTotal = currentCpu.total() - m_previousCpu.total();
-            const quint64 deltaIdle = currentCpu.idleAll() - m_previousCpu.idleAll();
-            if (deltaTotal > 0) {
-                const quint64 deltaBusy = deltaTotal > deltaIdle ? deltaTotal - deltaIdle : 0;
-                m_cpuUsage = 100.0 * double(deltaBusy) / double(deltaTotal);
+    if (statFile.open(QIODevice::ReadOnly)) {
+        // QFile::atEnd() lies for /proc files (size() is 0), so read until an
+        // empty line comes back instead.
+        while (true) {
+            const QByteArray line = statFile.readLine();
+            if (line.isEmpty()) {
+                break;
             }
+            CpuTimes times;
+            if (line.startsWith("cpu ")) {
+                if (parseCpuTimesLine(line, &times)) {
+                    currentCpu = times;
+                    haveAggregate = true;
+                }
+                continue;
+            }
+            int index = -1;
+            if (parseCoreCpuTimesLine(line, &index, &times)) {
+                if (cores.size() <= index) {
+                    cores.resize(index + 1);
+                }
+                cores[index] = times;
+            }
+        }
+    }
+    if (haveAggregate) {
+        if (m_havePreviousCpu) {
+            m_cpuUsage = cpuBusyPercent(m_previousCpu, currentCpu);
         }
         m_previousCpu = currentCpu;
         m_havePreviousCpu = true;
     }
+    readCoreUsage(cores);
+    readCpuPower(nowMs);
 
     readMemory();
 
@@ -350,6 +387,178 @@ void PerfBackend::refresh()
     }
 
     Q_EMIT statsChanged();
+}
+
+void PerfBackend::readCoreUsage(const QVector<CpuTimes> &cores)
+{
+    if (cores.isEmpty()) {
+        // No cpuN lines at all (very old kernel, or a container with a masked
+        // /proc/stat): drop the strip instead of drawing zeros.
+        m_previousCores.clear();
+        if (!m_coreUsage.isEmpty()) {
+            m_coreUsage.clear();
+            Q_EMIT coreUsageChanged();
+        }
+        return;
+    }
+
+    // First frame, or the thread count changed (SMT toggled, CPU hotplug):
+    // take the counters as the new baseline without publishing percentages,
+    // otherwise the first frame would be averaged over an unknown window.
+    if (m_previousCores.size() != cores.size()) {
+        m_previousCores = cores;
+        if (!m_coreUsage.isEmpty() && m_coreUsage.size() != cores.size()) {
+            m_coreUsage.clear();
+            Q_EMIT coreUsageChanged();
+        }
+        return;
+    }
+
+    QVariantList usage;
+    usage.reserve(cores.size());
+    bool changed = m_coreUsage.size() != cores.size();
+    for (int thread = 0; thread < cores.size(); ++thread) {
+        const double percent = std::round(cpuBusyPercent(m_previousCores.at(thread), cores.at(thread)) * 10.0) / 10.0;
+        usage.append(percent);
+        if (!changed && std::abs(m_coreUsage.at(thread).toDouble() - percent) >= 0.5) {
+            changed = true;
+        }
+    }
+    m_previousCores = cores;
+
+    if (!changed) {
+        return; // sub-percent jitter is not worth repainting 24 bars
+    }
+    m_coreUsage = usage;
+    Q_EMIT coreUsageChanged();
+}
+
+void PerfBackend::resolvePowerSource()
+{
+    // RAPL first: it is the only source that reports the whole package,
+    // including the uncore, and it is world readable on most kernels.
+    const QDir powercap(QStringLiteral("/sys/class/powercap"));
+    const QStringList zones = powercap.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    QString packageZone;
+    for (const QString &zone : zones) {
+        if (!zone.contains(QLatin1String("rapl"))) {
+            continue;
+        }
+        QFile nameFile(powercap.filePath(zone + QStringLiteral("/name")));
+        if (!nameFile.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        const QString name = QString::fromUtf8(nameFile.readAll()).trimmed();
+        if (!name.startsWith(QLatin1String("package"))) {
+            continue;
+        }
+        if (!QFileInfo(powercap.filePath(zone + QStringLiteral("/energy_uj"))).isReadable()) {
+            continue;
+        }
+        // intel-rapl-mmio mirrors the same package through MMIO; prefer the
+        // MSR-backed zone when both are present.
+        if (packageZone.isEmpty()
+            || (packageZone.contains(QLatin1String("mmio")) && !zone.contains(QLatin1String("mmio")))) {
+            packageZone = zone;
+        }
+    }
+    if (!packageZone.isEmpty()) {
+        m_powerSource = PowerSource::EnergyCounter;
+        m_powerPath = powercap.filePath(packageZone + QStringLiteral("/energy_uj"));
+        const QString rangePath = powercap.filePath(packageZone + QStringLiteral("/max_energy_range_uj"));
+        if (QFileInfo(rangePath).isReadable()) {
+            m_powerRangePath = rangePath;
+        }
+        return;
+    }
+
+    // hwmon fallback for machines where RAPL is not exposed (AMD with
+    // zenpower / amd_energy). Only CPU drivers are accepted: amdgpu and nvme
+    // also publish power1_average, and those are not the CPU package.
+    const QStringList cpuDrivers = {
+        QStringLiteral("zenpower"),
+        QStringLiteral("amd_energy"),
+        QStringLiteral("k10temp"),
+        QStringLiteral("coretemp"),
+        QStringLiteral("cpu"),
+    };
+    const QDir hwmon(QStringLiteral("/sys/class/hwmon"));
+    const QStringList sensors = hwmon.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (int pass = 0; pass < 2; ++pass) {
+        const QString leaf = pass == 0 ? QStringLiteral("/power1_average") : QStringLiteral("/energy1_input");
+        for (const QString &sensor : sensors) {
+            const QString base = hwmon.filePath(sensor);
+            QFile nameFile(base + QStringLiteral("/name"));
+            if (!nameFile.open(QIODevice::ReadOnly)) {
+                continue;
+            }
+            const QString name = QString::fromUtf8(nameFile.readAll()).trimmed();
+            if (!cpuDrivers.contains(name)) {
+                continue;
+            }
+            const QString path = base + leaf;
+            if (!QFileInfo(path).isReadable()) {
+                continue;
+            }
+            m_powerSource = pass == 0 ? PowerSource::PowerAverage : PowerSource::EnergyCounter;
+            m_powerPath = path;
+            return;
+        }
+    }
+}
+
+void PerfBackend::readCpuPower(qint64 nowMs)
+{
+    if (m_powerSource == PowerSource::None) {
+        return;
+    }
+
+    const auto readCounter = [](const QString &path, quint64 *out) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return false;
+        }
+        bool ok = false;
+        const quint64 value = file.readAll().trimmed().toULongLong(&ok);
+        if (!ok) {
+            return false;
+        }
+        *out = value;
+        return true;
+    };
+
+    if (m_powerSource == PowerSource::PowerAverage) {
+        quint64 microWatts = 0;
+        if (readCounter(m_powerPath, &microWatts) && microWatts > 0) {
+            m_cpuPowerWatts = double(microWatts) / 1000000.0;
+            m_cpuPowerAvailable = true;
+        }
+        return;
+    }
+
+    quint64 energyUj = 0;
+    if (!readCounter(m_powerPath, &energyUj)) {
+        return;
+    }
+    if (m_powerMaxRangeUj == 0 && !m_powerRangePath.isEmpty()) {
+        quint64 range = 0;
+        if (readCounter(m_powerRangePath, &range)) {
+            m_powerMaxRangeUj = range;
+        }
+    }
+
+    const qint64 elapsedMs = m_previousEnergyMs >= 0 ? nowMs - m_previousEnergyMs : -1;
+    if (elapsedMs > 0) {
+        const double watts = raplPowerWatts(m_previousEnergyUj, energyUj, m_powerMaxRangeUj, elapsedMs * 1000000LL);
+        if (watts > 0.0) {
+            // Sampled once a second, so a light EMA keeps the figure from
+            // jumping a few watts between frames without hiding real changes.
+            m_cpuPowerWatts = m_cpuPowerAvailable ? m_cpuPowerWatts * 0.4 + watts * 0.6 : watts;
+            m_cpuPowerAvailable = true;
+        }
+    }
+    m_previousEnergyUj = energyUj;
+    m_previousEnergyMs = nowMs;
 }
 
 void PerfBackend::readMemory()

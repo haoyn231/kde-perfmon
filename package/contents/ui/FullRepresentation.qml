@@ -10,7 +10,7 @@ Item {
     id: full
 
     implicitWidth: Kirigami.Units.gridUnit * 27
-    implicitHeight: Kirigami.Units.gridUnit * 35
+    implicitHeight: Kirigami.Units.gridUnit * 38
 
     readonly property color subtleFill: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.06)
     readonly property color subtleHover: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.12)
@@ -252,7 +252,11 @@ Item {
                 title: i18n("CPU")
                 valueText: Format.percent(PerfBackend.cpuUsage)
                 ratio: PerfBackend.cpuUsage / 100
-                detail: i18n("%1 cores", PerfBackend.cpuCount)
+                detail: PerfBackend.physicalCpuCount > 0 && PerfBackend.physicalCpuCount !== PerfBackend.cpuCount
+                    ? i18n("%1 cores · %2 threads", PerfBackend.physicalCpuCount, PerfBackend.cpuCount)
+                    : i18n("%1 cores", PerfBackend.cpuCount)
+                // 整包实时功耗，位置和 Memory 卡上的 Swap 一致；内核没暴露计数器时留空。
+                extra: PerfBackend.cpuPowerAvailable ? Format.watts(PerfBackend.cpuPowerWatts) : ""
             }
 
             StatCard {
@@ -265,6 +269,13 @@ Item {
                     ? i18n("Swap %1", Format.formatBytes(PerfBackend.swapUsedBytes))
                     : ""
             }
+        }
+
+        // 每核负载横带：夹在 CPU / 内存卡片和进程列表之间。
+        CoreBars {
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.smallSpacing
+            usage: PerfBackend.coreUsage
         }
 
         RowLayout {

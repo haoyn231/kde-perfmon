@@ -8,7 +8,11 @@ PlasmoidItem {
 
     Plasmoid.title: i18n("Performance Monitor")
     toolTipMainText: i18n("Performance Monitor")
-    toolTipSubText: i18n("CPU %1 · Memory %2", Format.percent(PerfBackend.cpuUsage), Format.percent(PerfBackend.memoryUsage))
+    // 面板上的气泡也跟着带上整包功耗，省得点开才知道。
+    toolTipSubText: PerfBackend.cpuPowerAvailable
+        ? i18n("CPU %1 · %2 · Memory %3", Format.percent(PerfBackend.cpuUsage),
+               Format.watts(PerfBackend.cpuPowerWatts), Format.percent(PerfBackend.memoryUsage))
+        : i18n("CPU %1 · Memory %2", Format.percent(PerfBackend.cpuUsage), Format.percent(PerfBackend.memoryUsage))
 
     preferredRepresentation: compactRepresentation
 

@@ -12,6 +12,9 @@ class PerfBackend : public QObject
     Q_OBJECT
 
     Q_PROPERTY(double cpuUsage READ cpuUsage NOTIFY statsChanged)
+    Q_PROPERTY(double cpuPowerWatts READ cpuPowerWatts NOTIFY statsChanged)
+    Q_PROPERTY(bool cpuPowerAvailable READ cpuPowerAvailable NOTIFY statsChanged)
+    Q_PROPERTY(QVariantList coreUsage READ coreUsage NOTIFY coreUsageChanged)
     Q_PROPERTY(double memoryUsage READ memoryUsage NOTIFY statsChanged)
     Q_PROPERTY(qulonglong memoryUsedBytes READ memoryUsedBytes NOTIFY statsChanged)
     Q_PROPERTY(qulonglong memoryTotalBytes READ memoryTotalBytes NOTIFY statsChanged)
@@ -19,6 +22,7 @@ class PerfBackend : public QObject
     Q_PROPERTY(qulonglong swapTotalBytes READ swapTotalBytes NOTIFY statsChanged)
     Q_PROPERTY(int processCount READ processCount NOTIFY processCountChanged)
     Q_PROPERTY(int cpuCount READ cpuCount CONSTANT)
+    Q_PROPERTY(int physicalCpuCount READ physicalCpuCount CONSTANT)
     Q_PROPERTY(QAbstractListModel *processModel READ processModel CONSTANT)
     Q_PROPERTY(bool processListActive READ processListActive WRITE setProcessListActive NOTIFY processListActiveChanged)
     Q_PROPERTY(bool processListPaused READ processListPaused WRITE setProcessListPaused NOTIFY processListPausedChanged)
@@ -35,6 +39,13 @@ public:
     explicit PerfBackend(QObject *parent = nullptr);
 
     double cpuUsage() const { return m_cpuUsage; }
+    // Package power draw in watts. `cpuPowerAvailable` is false when the kernel
+    // exposes no readable energy counter (RAPL / zenpower / amd_energy), so the
+    // popup can hide the figure instead of showing a made-up zero.
+    double cpuPowerWatts() const { return m_cpuPowerWatts; }
+    bool cpuPowerAvailable() const { return m_cpuPowerAvailable; }
+    // Per-thread CPU usage in percent, index == /proc/stat cpuN order.
+    QVariantList coreUsage() const { return m_coreUsage; }
     double memoryUsage() const;
     qulonglong memoryUsedBytes() const { return m_memoryUsedBytes; }
     qulonglong memoryTotalBytes() const { return m_memoryTotalBytes; }
@@ -42,6 +53,7 @@ public:
     qulonglong swapTotalBytes() const { return m_swapTotalBytes; }
     int processCount() const;
     int cpuCount() const { return m_cpuCount; }
+    int physicalCpuCount() const { return m_physicalCpuCount; }
 
     QAbstractListModel *processModel() { return &m_model; }
 
@@ -86,6 +98,7 @@ public Q_SLOTS:
 
 Q_SIGNALS:
     void statsChanged();
+    void coreUsageChanged();
     void processCountChanged();
     void processListActiveChanged();
     void processListPausedChanged();
@@ -96,14 +109,39 @@ private:
     void scanProcesses(qint64 nowMs);
     void resort();
 
+    // Where the CPU package power comes from. Resolved once at startup:
+    //   EnergyCounter - RAPL powercap or hwmon energyN_input (microjoules)
+    //   PowerAverage  - hwmon power1_average (microwatts, no delta needed)
+    enum class PowerSource {
+        None,
+        EnergyCounter,
+        PowerAverage,
+    };
+    void resolvePowerSource();
+    void readCpuPower(qint64 nowMs);
+    void readCoreUsage(const QVector<CpuTimes> &cores);
+
     ProcessModel m_model;
     QTimer m_timer;
     QElapsedTimer m_clock;
 
     CpuTimes m_previousCpu;
     bool m_havePreviousCpu = false;
+    // Previous per-thread counters from the cpuN lines of /proc/stat, and the
+    // percentages derived from them. Both are index == thread number.
+    QVector<CpuTimes> m_previousCores;
+    QVariantList m_coreUsage;
     QHash<int, quint64> m_previousTicks;
     qint64 m_previousProcessSampleMs = -1;
+
+    PowerSource m_powerSource = PowerSource::None;
+    QString m_powerPath;
+    QString m_powerRangePath;
+    quint64 m_powerMaxRangeUj = 0;
+    quint64 m_previousEnergyUj = 0;
+    qint64 m_previousEnergyMs = -1;
+    double m_cpuPowerWatts = 0.0;
+    bool m_cpuPowerAvailable = false;
 
     double m_cpuUsage = 0.0;
     qulonglong m_memoryUsedBytes = 0;
@@ -124,6 +162,7 @@ private:
     bool m_processListPaused = false;
 
     int m_cpuCount = 1;
+    int m_physicalCpuCount = 0;
     int m_clockTicks = 100;
     quint64 m_pageSize = 4096;
 };

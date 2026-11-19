@@ -1,5 +1,8 @@
 #include "procdata.h"
 
+#include <QPair>
+#include <QSet>
+
 #include <algorithm>
 
 quint64 CpuTimes::total() const
@@ -36,6 +39,111 @@ bool parseCpuTimesLine(const QByteArray &line, CpuTimes *out)
     out->softirq = value(6);
     out->steal = value(7);
     return true;
+}
+
+bool parseCoreCpuTimesLine(const QByteArray &line, int *index, CpuTimes *out)
+{
+    if (!out || !line.startsWith("cpu")) {
+        return false;
+    }
+    int cursor = 3;
+    while (cursor < line.size() && line.at(cursor) >= '0' && line.at(cursor) <= '9') {
+        ++cursor;
+    }
+    // No digits ("cpu  ...") or no separating space ("cpu0x") -> not a core line.
+    if (cursor == 3 || cursor >= line.size() || line.at(cursor) != ' ') {
+        return false;
+    }
+    bool ok = false;
+    const int core = line.mid(3, cursor - 3).toInt(&ok);
+    if (!ok || core < 0) {
+        return false;
+    }
+    // parseCpuTimesLine() only knows the aggregate form, so hand it the same
+    // field list under a normalised label instead of duplicating the parsing.
+    if (!parseCpuTimesLine("cpu" + line.mid(cursor), out)) {
+        return false;
+    }
+    if (index) {
+        *index = core;
+    }
+    return true;
+}
+
+double cpuBusyPercent(const CpuTimes &previous, const CpuTimes &current)
+{
+    const quint64 total = current.total();
+    const quint64 previousTotal = previous.total();
+    if (total <= previousTotal) {
+        return 0.0;
+    }
+    const quint64 deltaTotal = total - previousTotal;
+    const quint64 idle = current.idleAll();
+    const quint64 deltaIdle = idle >= previous.idleAll() ? idle - previous.idleAll() : 0;
+    const quint64 deltaBusy = deltaTotal > deltaIdle ? deltaTotal - deltaIdle : 0;
+    return std::clamp(100.0 * double(deltaBusy) / double(deltaTotal), 0.0, 100.0);
+}
+
+int countPhysicalCores(const QByteArray &cpuInfoData)
+{
+    // One QSet entry per (physical id, core id) pair; a missing "core id" means
+    // the kernel did not export topology and the caller should fall back.
+    QSet<QPair<int, int>> cores;
+    const QList<QByteArray> lines = cpuInfoData.split('\n');
+    int currentCoreId = -1;
+    int currentPhysicalId = 0;
+    bool sawCoreId = false;
+
+    auto flush = [&cores, &currentCoreId, &currentPhysicalId]() {
+        if (currentCoreId >= 0) {
+            cores.insert(qMakePair(currentPhysicalId, currentCoreId));
+            currentCoreId = -1;
+            currentPhysicalId = 0;
+        }
+    };
+
+    for (const QByteArray &line : lines) {
+        const int colon = line.indexOf(':');
+        if (colon <= 0) {
+            if (line.trimmed().isEmpty()) {
+                flush();
+            }
+            continue;
+        }
+        const QByteArray key = line.left(colon).trimmed();
+        const QByteArray value = line.mid(colon + 1).trimmed();
+        if (key == "processor") {
+            flush();
+        } else if (key == "core id") {
+            currentCoreId = value.toInt();
+            sawCoreId = true;
+        } else if (key == "physical id") {
+            currentPhysicalId = value.toInt();
+        }
+    }
+    flush();
+
+    return sawCoreId ? cores.size() : 0;
+}
+
+double raplPowerWatts(quint64 previousUj, quint64 currentUj, quint64 maxRangeUj, qint64 deltaNs)
+{
+    if (deltaNs <= 0) {
+        return 0.0;
+    }
+    quint64 deltaUj = 0;
+    if (currentUj >= previousUj) {
+        deltaUj = currentUj - previousUj;
+    } else if (maxRangeUj > previousUj) {
+        deltaUj = (maxRangeUj - previousUj) + currentUj; // counter wrapped around
+    } else {
+        return 0.0; // counter reset with no known range: this sample is garbage
+    }
+    const double watts = double(deltaUj) * 1000.0 / double(deltaNs); // uJ / ns == mW
+    if (!(watts >= 0.0) || watts > 100000.0) {
+        return 0.0;
+    }
+    return watts;
 }
 
 bool parseProcStat(const QByteArray &data, ProcStat *out, quint64 pageSize)

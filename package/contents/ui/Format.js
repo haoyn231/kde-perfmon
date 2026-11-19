@@ -19,3 +19,12 @@ function formatBytes(bytes) {
 function percent(value) {
     return (Number(value) || 0).toFixed(1) + "%";
 }
+
+// 功耗：几十瓦时保留一位小数没意义，上百瓦才需要整数读数的稳定感。
+function watts(value) {
+    const number = Number(value);
+    if (!isFinite(number) || number <= 0) {
+        return "";
+    }
+    return (number >= 100 ? number.toFixed(0) : number.toFixed(1)) + " W";
+}

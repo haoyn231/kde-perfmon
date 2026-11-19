@@ -21,6 +21,25 @@ struct CpuTimes {
 // Parses the aggregate "/proc/stat" line ("cpu  user nice system ...").
 bool parseCpuTimesLine(const QByteArray &line, CpuTimes *out);
 
+// Parses one per-thread "/proc/stat" line ("cpu0  user nice system ...") and
+// reports the thread index in *index. The aggregate line is rejected on
+// purpose; parseCpuTimesLine() is the one that handles it.
+bool parseCoreCpuTimesLine(const QByteArray &line, int *index, CpuTimes *out);
+
+// Busy share (0-100) between two samples of the same counter set. Returns 0
+// when the counters did not advance (e.g. the sample window was too short).
+double cpuBusyPercent(const CpuTimes &previous, const CpuTimes &current);
+
+// Counts the physical cores described by /proc/cpuinfo (unique
+// "physical id" + "core id" pairs). Returns 0 when the file carries no
+// topology information at all, so callers can fall back to the thread count.
+int countPhysicalCores(const QByteArray &cpuInfoData);
+
+// RAPL / hwmon energy counter delta -> average watts over the sample window.
+// `maxRangeUj` is the counter's wrap value (0 when unknown); a counter that
+// went backwards without a known range is treated as a reset and reported as 0.
+double raplPowerWatts(quint64 previousUj, quint64 currentUj, quint64 maxRangeUj, qint64 deltaNs);
+
 struct ProcStat {
     int pid = -1;
     int ppid = -1;

@@ -14,6 +14,10 @@ class PerfTest : public QObject
 private Q_SLOTS:
     void parseCpuTimes();
     void rejectForeignCpuLine();
+    void parseCoreCpuLine();
+    void cpuBusyPercentMath();
+    void countPhysicalCoresFromCpuinfo();
+    void raplPowerMath();
     void parseProcStatWithParens();
     void cmdlineParsing();
     void processCpuMath();
@@ -42,6 +46,102 @@ void PerfTest::rejectForeignCpuLine()
     CpuTimes times;
     QVERIFY(!parseCpuTimesLine("cpu0 1 2 3 4 5 6 7 8", &times));
     QVERIFY(!parseCpuTimesLine("intr 1 2 3", &times));
+}
+
+void PerfTest::parseCoreCpuLine()
+{
+    CpuTimes times;
+    int index = -1;
+    QVERIFY(parseCoreCpuTimesLine("cpu7 10 20 30 40 50 60 70 80 0 0\n", &index, &times));
+    QCOMPARE(index, 7);
+    QCOMPARE(times.user, quint64(10));
+    QCOMPARE(times.idle, quint64(40));
+    QCOMPARE(times.total(), quint64(360));
+
+    // Only digit-labelled lines are core lines; the aggregate and everything
+    // else stays with parseCpuTimesLine().
+    QVERIFY(!parseCoreCpuTimesLine("cpu  123 45 67 890 12 34 56 78", &index, &times));
+    QVERIFY(!parseCoreCpuTimesLine("cpu0x 1 2 3 4 5 6 7 8", &index, &times));
+    QVERIFY(!parseCoreCpuTimesLine("intr 1 2 3 4 5 6 7 8", &index, &times));
+    QVERIFY(!parseCoreCpuTimesLine("cpu3", &index, &times));
+
+    // An index pointer is optional.
+    QVERIFY(parseCoreCpuTimesLine("cpu0 1 2 3 4 5 6 7 8", nullptr, &times));
+}
+
+void PerfTest::cpuBusyPercentMath()
+{
+    CpuTimes previous;
+    previous.user = 100;
+    previous.idle = 100;
+
+    CpuTimes half;
+    half.user = 150;
+    half.idle = 150;
+    QVERIFY(qAbs(cpuBusyPercent(previous, half) - 50.0) < 0.0001);
+
+    CpuTimes idleOnly;
+    idleOnly.user = 100;
+    idleOnly.idle = 200;
+    QCOMPARE(cpuBusyPercent(previous, idleOnly), 0.0);
+
+    CpuTimes full;
+    full.user = 300;
+    full.idle = 100;
+    QCOMPARE(cpuBusyPercent(previous, full), 100.0);
+
+    // A sample window where the counters did not move at all yields nothing.
+    QCOMPARE(cpuBusyPercent(previous, previous), 0.0);
+}
+
+void PerfTest::countPhysicalCoresFromCpuinfo()
+{
+    const QByteArray twoSockets =
+        "processor\t: 0\n"
+        "physical id\t: 0\n"
+        "siblings\t: 4\n"
+        "core id\t\t: 0\n"
+        "cpu cores\t: 2\n"
+        "\n"
+        "processor\t: 1\n"
+        "physical id\t: 0\n"
+        "core id\t\t: 1\n"
+        "\n"
+        "processor\t: 2\n"
+        "physical id\t: 1\n"
+        "core id\t\t: 0\n"
+        "\n"
+        "processor\t: 3\n"
+        "physical id\t: 1\n"
+        "core id\t\t: 1\n"
+        "\n";
+    QCOMPARE(countPhysicalCores(twoSockets), 4);
+
+    // Repeated (physical, core) pairs are SMT siblings, not extra cores.
+    QByteArray smt = twoSockets;
+    smt += "processor\t: 4\nphysical id\t: 0\ncore id\t\t: 0\n\n";
+    QCOMPARE(countPhysicalCores(smt), 4);
+
+    // No topology fields -> 0, so the caller falls back to the thread count.
+    QCOMPARE(countPhysicalCores("processor\t: 0\nmodel name\t: whatever\n\n"), 0);
+    QCOMPARE(countPhysicalCores(QByteArray()), 0);
+}
+
+void PerfTest::raplPowerMath()
+{
+    // 1 J of energy over 1 s, expressed in RAPL's microjoules and nanoseconds.
+    QVERIFY(qAbs(raplPowerWatts(1000000, 2000000, 262143328850ULL, 1000000000LL) - 1.0) < 0.0001);
+    // 30 J over 1 s is 30 W.
+    QVERIFY(qAbs(raplPowerWatts(0, 30000000, 0, 1000000000LL) - 30.0) < 0.0001);
+
+    // Counter wrapped around: (max - previous) + current.
+    QVERIFY(qAbs(raplPowerWatts(99900000, 100000, 100000000, 1000000000LL) - 0.2) < 0.0001);
+
+    // Went backwards with no known range -> treated as a reset, not a huge
+    // negative power draw.
+    QCOMPARE(raplPowerWatts(5000, 1000, 0, 1000000000LL), 0.0);
+    // No time elapsed -> nothing to divide by.
+    QCOMPARE(raplPowerWatts(0, 1000000, 0, 0), 0.0);
 }
 
 void PerfTest::parseProcStatWithParens()
@@ -120,8 +220,25 @@ void PerfTest::liveSampling()
         QVERIFY2(QFileInfo(QUrl(backend.avatarUrl()).toLocalFile()).isFile(), "avatar URL must point at a file");
     }
     QVERIFY(backend.cpuCount() >= 1);
+    // Best effort: 0 means /proc/cpuinfo carried no topology at all.
+    QVERIFY(backend.physicalCpuCount() >= 0);
     QVERIFY(backend.memoryTotalBytes() > 0);
     QVERIFY(backend.memoryUsedBytes() <= backend.memoryTotalBytes());
+
+    // The per-thread strip needs one delta window before it reports anything.
+    QTRY_VERIFY_WITH_TIMEOUT(!backend.coreUsage().isEmpty(), 4000);
+    const QVariantList threadUsage = backend.coreUsage();
+    QVERIFY(threadUsage.size() >= 1);
+    for (const QVariant &sample : threadUsage) {
+        const double percent = sample.toDouble();
+        QVERIFY2(percent >= 0.0 && percent <= 100.0, "per-thread usage out of range");
+    }
+    // Package power is host dependent: only the range is guaranteed. When the
+    // kernel does expose a counter, the smoothed value must be positive.
+    QVERIFY(backend.cpuPowerWatts() >= 0.0);
+    if (backend.cpuPowerAvailable()) {
+        QVERIFY(backend.cpuPowerWatts() > 0.0);
+    }
 
     backend.setProcessListActive(true);
     QTRY_VERIFY_WITH_TIMEOUT(backend.processCount() > 0, 3000);

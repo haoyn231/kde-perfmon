@@ -31,6 +31,9 @@ Inspired by [DankMaterialShell (DMS)](https://github.com/AvengeMedia/DankMateria
 - Compact panel preview: two `icon + percentage` pairs (CPU, memory)
 - Click the CPU number to open the process list sorted by CPU; click memory to sort by memory
 - Popup header: distro logo, distro name, hostname, user avatar and username
+- The CPU card shows the live **package power draw** in its header (RAPL / hwmon energy-counter delta, in the same slot as `Swap` on the memory card); hidden automatically when the kernel exposes no counter
+- A **per-core load strip** sits below the CPU / memory cards: one rectangular bar per `cpuN` thread from `/proc/stat`, so the bar count follows the machine (24 threads, 24 bars); 70% / 90% switch to the neutral and negative theme colors, and hovering shows the thread index and percentage
+- The card subtitle distinguishes physical cores from threads (`8 cores · 16 threads`) and falls back to the thread count when `/proc/cpuinfo` has no topology
 - `CPU` / `Memory` sort chips; click the active chip again to flip ascending/descending; the arrow button does the same
 - Process rows: name, full command line (elided), CPU%, RSS, PID — no process icons
 - Click a row to expand the full command, PPID and memory percentage, then send SIGTERM or SIGKILL (force kill only for PIDs above 1000, with an inline confirmation)
