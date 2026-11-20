@@ -13,7 +13,6 @@ Item {
     implicitHeight: Kirigami.Units.gridUnit * 38
 
     readonly property color subtleFill: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.06)
-    readonly property color subtleHover: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.12)
     readonly property color dividerColor: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.12)
 
     readonly property real cpuColumnWidth: Kirigami.Units.gridUnit * 3.6
@@ -336,7 +335,10 @@ Item {
             SortChip {
                 text: i18n("CPU")
                 active: PerfBackend.sortKey === "cpu"
+                descending: !PerfBackend.sortAscending
                 onClicked: {
+                    // Jump back to the live top first, so the re-sort animation
+                    // plays on a table nobody is reading mid-scroll.
                     full.resetViewToTop();
                     PerfBackend.toggleSort("cpu");
                 }
@@ -345,48 +347,11 @@ Item {
             SortChip {
                 text: i18n("Memory")
                 active: PerfBackend.sortKey === "memory"
+                descending: !PerfBackend.sortAscending
                 onClicked: {
                     full.resetViewToTop();
                     PerfBackend.toggleSort("memory");
                 }
-            }
-
-            Rectangle {
-                id: directionButton
-
-                implicitWidth: Kirigami.Units.gridUnit * 1.55
-                implicitHeight: Kirigami.Units.gridUnit * 1.55
-                radius: height / 2
-                color: directionHover.hovered ? full.subtleHover : "transparent"
-
-                Kirigami.Icon {
-                    anchors.centerIn: parent
-                    source: PerfBackend.sortAscending ? "arrow-up-symbolic" : "arrow-down-symbolic"
-                    implicitWidth: Kirigami.Units.iconSizes.small
-                    implicitHeight: Kirigami.Units.iconSizes.small
-                    color: Kirigami.Theme.textColor
-                }
-
-                HoverHandler {
-                    id: directionHover
-                    cursorShape: Qt.PointingHandCursor
-                }
-
-                TapHandler {
-                    acceptedButtons: Qt.LeftButton
-                    onTapped: {
-                        full.resetViewToTop();
-                        PerfBackend.toggleSort(PerfBackend.sortKey);
-                    }
-                }
-
-                Accessible.role: Accessible.Button
-                Accessible.name: PerfBackend.sortAscending ? i18n("Ascending") : i18n("Descending")
-                Accessible.onPressAction: PerfBackend.toggleSort(PerfBackend.sortKey)
-
-                QQC2.ToolTip.visible: directionHover.hovered
-                QQC2.ToolTip.delay: 600
-                QQC2.ToolTip.text: PerfBackend.sortAscending ? i18n("Ascending") : i18n("Descending")
             }
         }
 
@@ -446,8 +411,30 @@ Item {
                 anchors.fill: parent
                 clip: true
                 model: PerfBackend.processModel
-                reuseItems: true
+                // 增量更新（行 move）配合 reuseItems 会留下位置没跟上、内容已经被
+                // 换成别的进程的「幽灵行」，两行叠在一起。这张表只创建视口附近
+                // 十几个 delegate，不值得为此冒险，直接关掉复用。
+                reuseItems: false
                 spacing: 0
+
+                // 后端每秒做的是增量 diff（move / insert / remove + dataChanged），
+                // 不是整模重建，所以这里可以把「换位的行」用一段短位移带过去，
+                // 而不是让整张表每秒硬跳一次。
+                move: Transition {
+                    NumberAnimation {
+                        properties: "y"
+                        duration: Kirigami.Units.shortDuration
+                        easing.type: Easing.OutCubic
+                    }
+                }
+
+                displaced: Transition {
+                    NumberAnimation {
+                        properties: "y"
+                        duration: Kirigami.Units.shortDuration
+                        easing.type: Easing.OutCubic
+                    }
+                }
 
                 QQC2.ScrollBar.vertical: QQC2.ScrollBar {
                     id: verticalScrollBar

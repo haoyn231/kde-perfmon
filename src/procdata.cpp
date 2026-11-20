@@ -214,14 +214,28 @@ double processCpuPercent(quint64 deltaTicks, qint64 deltaMs, int clockTicks, int
 void sortProcesses(QVector<ProcessInfo> &processes, const QString &key, bool ascending)
 {
     const bool byMemory = key == QLatin1String("memory");
-    std::stable_sort(processes.begin(), processes.end(), [byMemory, ascending](const ProcessInfo &a, const ProcessInfo &b) {
+    // CPU is compared at the resolution the table actually shows (one decimal).
+    // The raw percentage carries far more digits, and the sub-0.1% noise of
+    // sleeping processes is enough to reshuffle the whole idle tail on every
+    // sample - which used to be invisible behind a full model rebuild, but now
+    // would drag hundreds of rows around once a second. Quantising keeps those
+    // rows ordered by PID between ticks, so a row only moves when it really
+    // changed.
+    auto cpuTenths = [](double percent) {
+        return qRound64(percent * 10.0);
+    };
+    std::stable_sort(processes.begin(), processes.end(), [byMemory, ascending, cpuTenths](const ProcessInfo &a, const ProcessInfo &b) {
         int cmp = 0;
         if (byMemory) {
             if (a.memoryBytes != b.memoryBytes) {
                 cmp = a.memoryBytes < b.memoryBytes ? -1 : 1;
             }
-        } else if (a.cpu != b.cpu) {
-            cmp = a.cpu < b.cpu ? -1 : 1;
+        } else {
+            const qint64 aTenths = cpuTenths(a.cpu);
+            const qint64 bTenths = cpuTenths(b.cpu);
+            if (aTenths != bTenths) {
+                cmp = aTenths < bTenths ? -1 : 1;
+            }
         }
         if (cmp == 0) {
             return a.pid < b.pid; // stable tie break, also like DMS

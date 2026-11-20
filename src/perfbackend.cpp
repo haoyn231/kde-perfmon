@@ -315,22 +315,11 @@ void PerfBackend::resort()
         return;
     }
     // Reuse the current rows; sorting again is cheap compared to rescanning.
-    QVector<ProcessInfo> processes;
-    processes.reserve(m_model.rowCount());
-    for (int row = 0; row < m_model.rowCount(); ++row) {
-        const QModelIndex index = m_model.index(row, 0);
-        ProcessInfo info;
-        info.pid = index.data(ProcessModel::PidRole).toInt();
-        info.ppid = index.data(ProcessModel::PpidRole).toInt();
-        info.name = index.data(ProcessModel::NameRole).toString();
-        info.command = index.data(ProcessModel::CommandRole).toString();
-        info.cpu = index.data(ProcessModel::CpuRole).toDouble();
-        info.memoryBytes = index.data(ProcessModel::MemoryRole).toULongLong();
-        info.memoryPercent = index.data(ProcessModel::MemoryPercentRole).toDouble();
-        processes.append(info);
-    }
+    // The model diffs the sorted copy against what it already holds, so the
+    // view sees row moves (and animates them) instead of a model reset.
+    QVector<ProcessInfo> processes = m_model.processes();
     sortProcesses(processes, m_sortKey, m_sortAscending);
-    m_model.setProcesses(std::move(processes));
+    m_model.syncProcesses(std::move(processes));
 }
 
 void PerfBackend::refresh()
@@ -634,6 +623,20 @@ void PerfBackend::scanProcesses(qint64 nowMs)
     const bool havePrevious = m_previousProcessSampleMs >= 0;
     const qint64 deltaMs = havePrevious ? nowMs - m_previousProcessSampleMs : 0;
 
+    // Without a previous sample there is no delta to derive usage from. Carrying
+    // the values that are already on screen is what keeps the table still: if
+    // every row reported 0.0% for one tick, the sort would fall back to PID
+    // order and the whole list would shuffle once every time the popup opens or
+    // the reader returns to the top.
+    QHash<int, double> carriedCpu;
+    if (!havePrevious) {
+        const QVector<ProcessInfo> &shown = m_model.processes();
+        carriedCpu.reserve(shown.size());
+        for (const ProcessInfo &row : shown) {
+            carriedCpu.insert(row.pid, row.cpu);
+        }
+    }
+
     QVector<ProcessInfo> processes;
     processes.reserve(1024);
     QHash<int, quint64> currentTicks;
@@ -681,6 +684,8 @@ void PerfBackend::scanProcesses(qint64 nowMs)
             if (previous != m_previousTicks.constEnd() && stat.cpuTicks >= previous.value()) {
                 info.cpu = processCpuPercent(stat.cpuTicks - previous.value(), deltaMs, m_clockTicks, m_cpuCount);
             }
+        } else {
+            info.cpu = carriedCpu.value(pid, 0.0);
         }
 
         processes.append(info);
@@ -691,6 +696,6 @@ void PerfBackend::scanProcesses(qint64 nowMs)
     m_previousProcessSampleMs = nowMs;
 
     sortProcesses(processes, m_sortKey, m_sortAscending);
-    m_model.setProcesses(std::move(processes));
+    m_model.syncProcesses(std::move(processes));
     Q_EMIT processCountChanged();
 }

@@ -22,6 +22,8 @@ private Q_SLOTS:
     void cmdlineParsing();
     void processCpuMath();
     void sortByCpuAndMemory();
+    void sortIgnoresCpuNoise();
+    void processModelIncrementalSync();
     void liveSampling();
     void processListPause();
     void removeProcess();
@@ -206,6 +208,104 @@ void PerfTest::sortByCpuAndMemory()
     QCOMPARE(processes.at(0).pid, 2);
 }
 
+// Sub-0.1% CPU noise must not count as a real difference: otherwise the idle
+// tail of the table gets a different order on every sample and the row-move
+// animation turns into permanent churn.
+void PerfTest::sortIgnoresCpuNoise()
+{
+    auto make = [](int pid, double cpu) {
+        ProcessInfo info;
+        info.pid = pid;
+        info.name = QString::number(pid);
+        info.command = info.name;
+        info.cpu = cpu;
+        return info;
+    };
+
+    QVector<ProcessInfo> processes{make(9, 0.004), make(3, 0.001), make(7, 0.008)};
+    sortProcesses(processes, QStringLiteral("cpu"), false);
+    // All three show "0.0%", so they keep PID order instead of chasing noise.
+    QCOMPARE(processes.at(0).pid, 3);
+    QCOMPARE(processes.at(1).pid, 7);
+    QCOMPARE(processes.at(2).pid, 9);
+
+    processes = {make(9, 0.004), make(3, 0.24), make(7, 0.008)};
+    sortProcesses(processes, QStringLiteral("cpu"), false);
+    // A visible difference (0.2% vs 0.0%) still sorts.
+    QCOMPARE(processes.at(0).pid, 3);
+    QCOMPARE(processes.at(1).pid, 7);
+    QCOMPARE(processes.at(2).pid, 9);
+}
+
+// The view animates row movements, which only works while the model keeps its
+// rows alive: a re-sort has to move them, a value change has to patch them in
+// place, and only genuinely new / gone PIDs may insert or remove.
+void PerfTest::processModelIncrementalSync()
+{
+    auto make = [](int pid, double cpu) {
+        ProcessInfo info;
+        info.pid = pid;
+        info.name = QStringLiteral("proc-%1").arg(pid);
+        info.command = info.name;
+        info.cpu = cpu;
+        info.memoryBytes = quint64(pid) * 1024;
+        return info;
+    };
+
+    ProcessModel model;
+    QSignalSpy resetSpy(&model, &QAbstractItemModel::modelReset);
+    QSignalSpy moveSpy(&model, &QAbstractItemModel::rowsMoved);
+    QSignalSpy insertSpy(&model, &QAbstractItemModel::rowsInserted);
+    QSignalSpy removeSpy(&model, &QAbstractItemModel::rowsRemoved);
+    QSignalSpy changeSpy(&model, &QAbstractItemModel::dataChanged);
+
+    model.syncProcesses({make(1, 1.0), make(2, 2.0), make(3, 3.0)});
+    QCOMPARE(model.rowCount(), 3);
+    QCOMPARE(insertSpy.count(), 3);
+    QCOMPARE(changeSpy.count(), 0);
+
+    // A re-sort moves the existing rows instead of rebuilding the model.
+    insertSpy.clear();
+    moveSpy.clear();
+    model.syncProcesses({make(3, 3.0), make(1, 1.0), make(2, 2.0)});
+    QCOMPARE(resetSpy.count(), 0);
+    QVERIFY2(moveSpy.count() >= 1, "a re-sort must move rows, not re-insert them");
+    QCOMPARE(insertSpy.count(), 0);
+    QCOMPARE(model.index(0, 0).data(ProcessModel::PidRole).toInt(), 3);
+    QCOMPARE(model.index(1, 0).data(ProcessModel::PidRole).toInt(), 1);
+    QCOMPARE(model.index(2, 0).data(ProcessModel::PidRole).toInt(), 2);
+
+    // A changed value patches one role in place and reports only that role.
+    moveSpy.clear();
+    changeSpy.clear();
+    model.syncProcesses({make(3, 9.5), make(1, 1.0), make(2, 2.0)});
+    QCOMPARE(moveSpy.count(), 0);
+    QCOMPARE(changeSpy.count(), 1);
+    QCOMPARE(changeSpy.at(0).at(2).value<QList<int>>(), QList<int>{ProcessModel::CpuRole});
+    QCOMPARE(model.index(0, 0).data(ProcessModel::CpuRole).toDouble(), 9.5);
+
+    // Nothing changed at all: not a single signal.
+    changeSpy.clear();
+    model.syncProcesses({make(3, 9.5), make(1, 1.0), make(2, 2.0)});
+    QCOMPARE(changeSpy.count(), 0);
+
+    // PIDs that exited disappear, unknown PIDs are inserted.
+    moveSpy.clear();
+    removeSpy.clear();
+    insertSpy.clear();
+    model.syncProcesses({make(4, 4.0), make(3, 9.5)});
+    QCOMPARE(resetSpy.count(), 0);
+    QCOMPARE(model.rowCount(), 2);
+    QCOMPARE(model.index(0, 0).data(ProcessModel::PidRole).toInt(), 4);
+    QVERIFY(insertSpy.count() >= 1);
+    QVERIFY(removeSpy.count() >= 1);
+
+    // An empty scan empties the model without a reset.
+    model.syncProcesses({});
+    QCOMPARE(model.rowCount(), 0);
+    QCOMPARE(resetSpy.count(), 0);
+}
+
 void PerfTest::liveSampling()
 {
     PerfBackend backend;
@@ -278,7 +378,10 @@ void PerfTest::liveSampling()
             } else {
                 const double a = previous.data(ProcessModel::CpuRole).toDouble();
                 const double b = current.data(ProcessModel::CpuRole).toDouble();
-                if (ascending ? a > b : a < b) {
+                // CPU is sorted on the displayed 0.1% resolution, so rows that
+                // show the same value may sit in either order (tie broken by
+                // PID) without the list being out of order.
+                if (ascending ? a > b + 0.2 : a < b - 0.2) {
                     return false;
                 }
             }
@@ -307,7 +410,11 @@ void PerfTest::processListPause()
     QTRY_VERIFY_WITH_TIMEOUT(backend.processCount() > 0, 3000);
 
     QAbstractListModel *model = backend.processModel();
+    // The table refreshes by diffing into the same model: a reset would destroy
+    // every delegate and with it the row-move animation, so none is expected.
     QSignalSpy resetSpy(model, &QAbstractItemModel::modelReset);
+    QSignalSpy changeSpy(model, &QAbstractItemModel::dataChanged);
+    QSignalSpy countSpy(&backend, &PerfBackend::processCountChanged);
     QSignalSpy statsSpy(&backend, &PerfBackend::statsChanged);
     QVERIFY(!backend.processListPaused());
 
@@ -315,19 +422,24 @@ void PerfTest::processListPause()
     QVERIFY(backend.processListPaused());
     const int frozenCount = backend.processCount();
     resetSpy.clear();
+    changeSpy.clear();
+    countSpy.clear();
     statsSpy.clear();
 
     QTest::qWait(1400);
 
     // The table is a still frame: no rescan, no resort, no row moves.
-    QCOMPARE(resetSpy.count(), 0);
+    QCOMPARE(changeSpy.count(), 0);
+    QCOMPARE(countSpy.count(), 0);
     QCOMPARE(backend.processCount(), frozenCount);
     // The machine totals keep ticking while the table is frozen.
     QVERIFY2(statsSpy.count() >= 1, "CPU / memory stats must keep updating while paused");
 
     backend.setProcessListPaused(false);
     QVERIFY(!backend.processListPaused());
-    QVERIFY2(resetSpy.count() >= 1, "resuming must rescan immediately");
+    // Resuming rescans into the existing rows instead of rebuilding the model.
+    QVERIFY2(countSpy.count() >= 1, "resuming must rescan immediately");
+    QCOMPARE(resetSpy.count(), 0);
 
     // Opening the popup clears a stale freeze, so a destroyed QML item can
     // never leave the list permanently stuck.

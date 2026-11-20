@@ -2,6 +2,8 @@
 // frames so the UI can be inspected without a running panel. It also reports
 // the Kirigami colors before and after the system color scheme changes.
 #include <QAbstractItemModel>
+
+#include <algorithm>
 #include <QGuiApplication>
 #include <QImage>
 #include <QQmlComponent>
@@ -109,6 +111,33 @@ void sendWheelNotch(QQuickView *view, QQuickItem *list, int notches)
     QCoreApplication::sendEvent(view, &event);
 }
 
+// Delegates must never overlap: a row that keeps a stale y (or a recycled
+// delegate that lost track of its position) draws two processes on top of each
+// other, which is invisible in a moving screenshot but obvious to the eye.
+int countOverlappingRows(QQuickItem *root)
+{
+    QList<QQuickItem *> rows;
+    collectItemsWithProperty(root, "pid", rows);
+    struct Span {
+        qreal top;
+        qreal bottom;
+        int pid;
+    };
+    QList<Span> spans;
+    for (QQuickItem *row : rows) {
+        const qreal y = row->mapToScene(QPointF(0, 0)).y();
+        spans.append({y, y + row->height(), row->property("pid").toInt()});
+    }
+    std::sort(spans.begin(), spans.end(), [](const Span &a, const Span &b) { return a.top < b.top; });
+    int overlaps = 0;
+    for (int i = 1; i < spans.size(); ++i) {
+        if (spans.at(i).top < spans.at(i - 1).bottom - 1.5) {
+            ++overlaps;
+        }
+    }
+    return overlaps;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -174,7 +203,8 @@ int main(int argc, char **argv)
         if (!image.save(path)) {
             std::fprintf(stderr, "SAVE FAILED %s\n", path.toUtf8().constData());
         } else {
-            std::fprintf(stderr, "SAVED %s %dx%d\n", path.toUtf8().constData(), image.width(), image.height());
+            std::fprintf(stderr, "SAVED %s %dx%d overlaps=%d\n", path.toUtf8().constData(), image.width(),
+                         image.height(), countOverlappingRows(view.rootObject()));
         }
         dumpTexts(view.rootObject(), 0);
         if (QQuickItem *scrollBar = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processScrollBar"))) {
@@ -279,7 +309,13 @@ int main(int argc, char **argv)
     // Scroll / freeze / back-to-top scenario. Each step reports what the user
     // would see, so a regression shows up as a changed log line or a changed
     // frame instead of having to be spotted by hand.
+    // The table refreshes by diffing into the same model (moves + in-place
+    // role updates), because a reset would destroy every delegate and with it
+    // the row-move animation. Both are counted so a regression to reset-based
+    // rebuilding shows up as a log line instead of a janky animation.
     int modelResets = 0;
+    int rowMoves = 0;
+    int roleUpdates = 0;
     int resetsWhenFrozen = -1;
 
     QTimer::singleShot(3000, &app, [&]() {
@@ -288,9 +324,12 @@ int main(int argc, char **argv)
         if (list) {
             if (auto *model = qobject_cast<QAbstractItemModel *>(list->property("model").value<QObject *>())) {
                 QObject::connect(model, &QAbstractItemModel::modelReset, &app, [&modelResets]() { ++modelResets; });
+                QObject::connect(model, &QAbstractItemModel::rowsMoved, &app, [&rowMoves]() { ++rowMoves; });
+                QObject::connect(model, &QAbstractItemModel::dataChanged, &app, [&roleUpdates]() { ++roleUpdates; });
             }
-            std::fprintf(stderr, "LIVE contentY=%.0f resets=%d max-cpu=%.2f\n", listContentY(list), modelResets,
-                     maxProcessCpu(list));
+            std::fprintf(stderr, "LIVE contentY=%.0f resets=%d moves=%d updates=%d overlaps=%d max-cpu=%.2f\n",
+                         listContentY(list), modelResets, rowMoves, roleUpdates, countOverlappingRows(view.rootObject()),
+                         maxProcessCpu(list));
         }
     });
 
@@ -339,6 +378,9 @@ int main(int argc, char **argv)
         }
         const QPoint click = button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).toPoint();
         QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, click);
+        // Park the pointer outside the rows again, so the final frames show no
+        // hover highlight on whichever row happened to sit under the click.
+        QTest::mouseMove(&view, QPoint(4, 4));
         std::fprintf(stderr, "BACK-TO-TOP clicked at=%d,%d contentY=%.0f\n", click.x(), click.y(),
                      listContentY(list));
     });
@@ -346,8 +388,9 @@ int main(int argc, char **argv)
     QTimer::singleShot(8200, &app, [&]() {
         QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
         QQuickItem *badge = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("pausedBadge"));
-        std::fprintf(stderr, "RESUMED contentY=%.0f resets=%d paused-badge=%d\n",
-                     listContentY(list), modelResets, badge ? badge->isVisible() : -1);
+        std::fprintf(stderr, "RESUMED contentY=%.0f resets=%d moves=%d updates=%d overlaps=%d paused-badge=%d\n",
+                     listContentY(list), modelResets, rowMoves, roleUpdates, countOverlappingRows(view.rootObject()),
+                     badge ? badge->isVisible() : -1);
     });
 
     QTimer::singleShot(9000, &app, [&]() {
