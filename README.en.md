@@ -34,7 +34,8 @@ Inspired by [DankMaterialShell (DMS)](https://github.com/AvengeMedia/DankMateria
 - The CPU card shows the live **package power draw** in its header (RAPL / hwmon energy-counter delta, in the same slot as `Swap` on the memory card); hidden automatically when the kernel exposes no counter
 - A **per-core load strip** sits below the CPU / memory cards: one rectangular bar per `cpuN` thread from `/proc/stat`, so the bar count follows the machine (24 threads, 24 bars); 70% / 90% switch to the neutral and negative theme colors, and hovering shows the thread index and percentage
 - The card subtitle distinguishes physical cores from threads (`8 cores · 16 threads`) and falls back to the thread count when `/proc/cpuinfo` has no topology
-- `CPU` / `Memory` sort chips; click the active chip again to flip ascending/descending; the arrow button does the same
+- `CPU` / `Memory` sort chips: the active chip is highlighted and shows `↓` / `↑` after its label; click the active chip again to flip ascending/descending
+- The table is updated **incrementally** every second: rows that changed position are moved, only changed fields are rewritten, and ListView animates the movement with a short transition instead of the whole model being rebuilt (re-sorting slides instead of jumping)
 - Process rows: name, full command line (elided), CPU%, RSS, PID — no process icons
 - Click a row to expand the full command, PPID and memory percentage, then send SIGTERM or SIGKILL (force kill only for PIDs above 1000, with an inline confirmation)
 - The list refreshes live only while it is pinned to the top; scrolling away freezes it into a still table and shows `Paused` next to the title, so rows never re-sort under the pointer
@@ -50,14 +51,14 @@ Inspired by [DankMaterialShell (DMS)](https://github.com/AvengeMedia/DankMateria
 The release archive contains a **prebuilt** plugin; no compiler is needed.
 
 1. Requirements: KDE Plasma 6 (Qt 6.5+), Kirigami (shipped with Plasma). The release is built on Arch Linux / Plasma 6.8 / Qt 6.12. If the plugin fails to load on another distribution, use Option 2 and build from source.
-2. Download `kde-perfmon-vX.Y.Z.tar.gz` and the matching `.sha256` from [Releases](https://github.com/haoyn231/kde-perfmon/releases), then verify:
+2. Download `kde-perfmon-vX.Y.Z.tar.gz` and the matching `.sha256` from [Releases](https://github.com/haoyn231/kde-perfmon/releases) — substitute the version shown on that page, currently `1.2.1` — then verify:
    ```bash
-   sha256sum -c kde-perfmon-v1.0.3.tar.gz.sha256
+   sha256sum -c kde-perfmon-v1.2.1.tar.gz.sha256
    ```
 3. Extract it into your user Plasma widget directory:
    ```bash
    mkdir -p ~/.local/share/plasma/plasmoids
-   tar -xzf kde-perfmon-v1.0.3.tar.gz -C ~/.local/share/plasma/plasmoids
+   tar -xzf kde-perfmon-v1.2.1.tar.gz -C ~/.local/share/plasma/plasmoids
    ```
    You should then have:
    ```
@@ -104,8 +105,7 @@ Then add the widget to the panel as described in Option 1, step 5.
 - While the popup is open, clicking the CPU or memory preview again closes it.
 - Inside the popup:
   - click `CPU` / `Memory` to change the sort column;
-  - click the active column again to flip ascending/descending;
-  - the arrow button flips the current sort direction;
+  - click the active column again to flip ascending/descending (the arrow inside the chip follows the direction);
   - scroll the process list with the mouse wheel over it, or with a touchpad two-finger gesture.
 - Live updates only happen at the very top:
   - pinned to the top, the list refreshes every second;
@@ -130,14 +130,14 @@ One sample per second, read entirely from `/proc`, with no background daemon:
 | System memory used | `total - free - buffers - (Cached + SReclaimable - Shmem)`, same as gopsutil / DMS |
 | Swap | `SwapTotal - SwapFree` |
 
-Sorting matches DMS: changing columns starts descending; clicking the active column flips direction; ties are broken by ascending PID.
+Sorting matches DMS: changing columns starts descending; clicking the active column flips direction; ties are broken by ascending PID. CPU is compared at the resolution the table shows (0.1%), so the large block of idle processes does not reshuffle itself on every sample.
 
 ### Refresh and freeze
 
 - Total CPU / memory: updated every second whenever the popup is open, independent of the table.
-- Process table: rescanned and re-sorted every second only while the popup is open **and** the list is pinned to the top. Scrolling down freezes it — `/proc` is no longer scanned for processes and the model is no longer reset.
+- Process table: rescanned and re-sorted every second only while the popup is open **and** the list is pinned to the top. Scrolling down freezes it — `/proc` is no longer scanned for processes and the model stops changing. Re-sorting goes through an incremental diff (move / insert / remove plus per-field updates), never a model reset.
 - Popup closed: both are dialed back; only the machine totals are sampled and processes are not scanned at all.
-- Returning to the top starts a fresh sampling window, so the first frame after resuming may report close to 0% per process and is correct again one second later. That is the price of not averaging the paused period into the CPU percentage.
+- Returning to the top starts a fresh sampling window: the first frame keeps the values that were already on screen (the list does not collapse into 0% and re-sort), and one second later the real numbers for the new window take over.
 
 ## System header
 

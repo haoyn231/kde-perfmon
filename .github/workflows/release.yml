@@ -22,15 +22,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate tag against package metadata
+      - name: Validate tag against package metadata and CMake
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          # The About dialog reads KPlugin.Version from package/metadata.json and
+          # the release asset name comes from the tag, so all three have to agree
+          # before anything is built or attached.
           if ! grep -q "\"Version\": \"${version}\"" package/metadata.json; then
             echo "::error::package/metadata.json Version does not match tag ${GITHUB_REF_NAME}"
             exit 1
           fi
-          echo "Tag ${GITHUB_REF_NAME} matches metadata version ${version}"
+          cmake_version="$(grep -oE 'project\(kde-perfmon VERSION [0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$')"
+          if [ "${cmake_version}" != "${version}" ]; then
+            echo "::error::CMakeLists.txt project version ${cmake_version} does not match tag ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          if [ ! -f "docs/releases/${GITHUB_REF_NAME}.md" ]; then
+            echo "::warning::docs/releases/${GITHUB_REF_NAME}.md is missing, the generic template will be used"
+          fi
+          echo "Tag ${GITHUB_REF_NAME} matches metadata and CMake versions (${version})"
 
       - name: Build and test in Arch Linux
         run: |

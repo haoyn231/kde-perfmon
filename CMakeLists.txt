@@ -1,5 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
-project(kde-perfmon VERSION 1.1.0 LANGUAGES CXX)
+project(kde-perfmon VERSION 1.2.1 LANGUAGES CXX)
+
+# The plasmoid's "About" dialog shows KPlugin.Version from package/metadata.json,
+# while the CMake project version tags the build. A stale metadata version is
+# exactly how the About dialog kept showing 1.0.3 next to a 1.1.0 build, so the
+# two are checked against each other here instead of being spotted by eye later.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/package/metadata.json" PERFMON_METADATA)
+string(REGEX MATCH "\"Version\"[ \t]*:[ \t]*\"([0-9]+[.][0-9]+[.][0-9]+)\"" _ "${PERFMON_METADATA}")
+set(PERFMON_METADATA_VERSION "${CMAKE_MATCH_1}")
+if(NOT PERFMON_METADATA_VERSION STREQUAL PROJECT_VERSION)
+    message(FATAL_ERROR
+        "Version mismatch: package/metadata.json says ${PERFMON_METADATA_VERSION}, "
+        "CMakeLists.txt project() says ${PROJECT_VERSION}. Bump both in the same commit "
+        "(the About dialog reads metadata.json, the release tag must match it).")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

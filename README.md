@@ -34,7 +34,8 @@ KDE Plasma 6 面板小程序（Plasmoid）：在菜单栏预览 CPU 与内存占
 - CPU 卡片头部实时显示**整包功耗**（RAPL / hwmon 能量计数器差分，位置与内存卡上的 `Swap` 一致）；内核没暴露计数器时自动留空
 - CPU / 内存卡片下方是一条**每核负载横带**：按 `/proc/stat` 的 `cpuN` 逐线程画矩形柱状图，线程数自动跟随（24 线程就是 24 根），70% / 90% 分别换成提示色与告警色，悬停可看具体线程编号与百分比
 - 卡片副标题会区分物理核心与线程数（如 `8 cores · 16 threads`），识别不出来时退回线程数
-- 弹窗内提供 `CPU` / `Memory` 排序按钮，再点当前按钮切换升/降序，箭头按钮也可切换
+- 弹窗内提供 `CPU` / `Memory` 排序按钮：当前列高亮，并在文字右侧显示 `↓` / `↑`；再点当前按钮切换升/降序
+- 进程表每秒做**增量更新**：只挪动换了位置的行、只改写变化的字段，行位移动画用短过渡带过，不再整表重建（切换排序列时的重排也是滑过去而不是跳一下）
 - 进程行：名称、完整命令行（省略显示）、CPU%、RSS、PID（不显示进程图标）
 - 点击进程行展开完整命令行、PPID 与内存占比，可发送 SIGTERM 或 SIGKILL（强制终止仅对 PID > 1000 开放，操作前需确认）
 - 列表只在滚动到最顶上时实时刷新；一旦向下滚动就冻结成静态表格，标题旁显示 `Paused`，避免每秒重排打断阅读
@@ -50,21 +51,21 @@ KDE Plasma 6 面板小程序（Plasmoid）：在菜单栏预览 CPU 与内存占
 Release 包内是**已经编译好**的插件，普通用户不需要安装编译工具。
 
 1. 系统要求：KDE Plasma 6（Qt 6.5+）、Kirigami（Plasma 自带）。发布包在 Arch Linux / Plasma 6.8 / Qt 6.12 上构建；其它发行版如果插件加载失败，请改用「方式二」从源码构建。
-2. 从 [Releases](https://github.com/haoyn231/kde-perfmon/releases) 下载 `kde-perfmon-vX.Y.Z.tar.gz` 和对应的 `.sha256` 文件，并校验：
+2. 从 [Releases](https://github.com/haoyn231/kde-perfmon/releases) 下载 `kde-perfmon-vX.Y.Z.tar.gz` 和对应的 `.sha256` 文件（`X.Y.Z` 换成该页面上的版本号，当前是 `1.2.1`），并校验：
    ```bash
-   sha256sum -c kde-perfmon-v1.0.3.tar.gz.sha256
+   sha256sum -c kde-perfmon-v1.2.1.tar.gz.sha256
    ```
 3. 解压到当前用户的 Plasma 小程序目录：
    ```bash
    mkdir -p ~/.local/share/plasma/plasmoids
-   tar -xzf kde-perfmon-v1.0.3.tar.gz -C ~/.local/share/plasma/plasmoids
+   tar -xzf kde-perfmon-v1.2.1.tar.gz -C ~/.local/share/plasma/plasmoids
    ```
    解压后应存在：
    ```
    ~/.local/share/plasma/plasmoids/org.hao.perfmon/metadata.json
    ~/.local/share/plasma/plasmoids/org.hao.perfmon/contents/lib/Hao/PerfMon/libperfmonplugin.so
    ```
-4. 让 Plasma 重新加载插件（首次安装通常已经能识别，升级后建议执行）：
+4. 让 Plasma 重新加载插件（首次安装通常已经能识别，**升级后必须执行**，「关于」里的版本号才会更新）：
    ```bash
    systemctl --user restart plasma-plasmashell.service
    ```
@@ -104,8 +105,7 @@ systemctl --user restart plasma-plasmashell.service
 - 弹窗打开后，再次点击 CPU 或内存预览即可关闭。
 - 弹窗内：
   - 点击 `CPU` / `Memory` 切换排序列；
-  - 再次点击当前列，切换升序 / 降序；
-  - 右侧箭头按钮切换当前列的排序方向；
+  - 再次点击当前列，切换升序 / 降序（箭头就在按钮里，随方向翻转）；
   - 鼠标滚轮悬浮滚动进程列表，触控板双指滚动同样生效。
 - 列表的实时刷新只在最顶端生效：
   - 停在最顶上时每秒刷新，数值一直在动；
@@ -130,14 +130,14 @@ systemctl --user restart plasma-plasmashell.service
 | 系统内存已用 | `total - free - buffers - (Cached + SReclaimable - Shmem)`，与 gopsutil / DMS 一致 |
 | 交换分区 | `SwapTotal - SwapFree` |
 
-排序规则与 DMS 一致：切换列时从降序开始，再点同一列切换方向；数值相同时按 PID 升序。
+排序规则与 DMS 一致：切换列时从降序开始，再点同一列切换方向；数值相同时按 PID 升序。CPU 按界面显示精度（0.1%）比较，这样空闲进程那一大片不会因为采样噪声每秒互相换位。
 
 ### 刷新与冻结
 
 - 整机 CPU / 内存：弹窗打开时始终每秒更新，与列表是否冻结无关。
-- 进程表：只有在弹窗打开**且**列表停在最顶端时才每秒重扫 `/proc` 并重排；向下滚动后冻结，不再扫描进程，也不再重置模型。
+- 进程表：只有在弹窗打开**且**列表停在最顶端时才每秒重扫 `/proc` 并重排；向下滚动后冻结，不再扫描进程，模型也保持不动。重排走的是增量 diff（move / insert / remove + 单字段更新），不是整模 reset。
 - 弹窗关闭时两者都降级：只保留整机 CPU / 内存采样，完全不扫描进程。
-- 从冻结回到顶部时会重新建立采样基线，因此恢复后的第一帧进程 CPU 可能接近 0%，下一秒即恢复真实值——这是「不把暂停期间的时间摊进平均值」的代价。
+- 从冻结回到顶部时重新建立采样基线：恢复后的第一帧沿用屏幕上已有的数值（列表不会先塌成一堆 0% 再重排），下一秒换成按新窗口算出的真实值。
 
 ## 系统信息头
 
@@ -177,7 +177,26 @@ QT_QPA_PLATFORMTHEME=KDE QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
     ./build/perfmon-preview package/contents/ui/FullRepresentation.qml /tmp/preview
 ```
 
-CI 在 Arch Linux 容器中安装 Qt 6 / Kirigami / libplasma，执行构建、单元测试、`qmllint` 和离屏渲染。推送 `v*.*.*` 形式的 tag（例如 `v1.0.0`）会触发 Release 工作流，自动构建并上传可直接安装的插件包与 SHA-256 校验文件。
+CI 在 Arch Linux 容器中安装 Qt 6 / Kirigami / libplasma，执行构建、单元测试、`qmllint` 和离屏渲染。推送 `v*.*.*` 形式的 tag（例如 `v1.2.1`）会触发 Release 工作流，自动构建并上传可直接安装的插件包与 SHA-256 校验文件。
+
+### 发布（打 tag 前必查）
+
+三个版本号必须一致，任何一个对不上，`cmake` 配置阶段或 Release 工作流都会直接失败：
+
+| 位置 | 谁在读它 |
+| --- | --- |
+| `CMakeLists.txt` 的 `project(... VERSION x.y.z)` | 构建产物、CI |
+| `package/metadata.json` 的 `KPlugin.Version` | **弹窗「关于」里显示的版本**、Release 包 |
+| git tag `vx.y.z` | Release 工作流的资产名 |
+
+`cmake` 配置时会比对前两个，不一致直接 `FATAL_ERROR`；Release 工作流再校验 tag 与前两个是否相同。所以一次发版的完整动作是：
+
+1. 同一个提交里改 `CMakeLists.txt` 与 `package/metadata.json` 的版本号；
+2. 新增 `docs/releases/vx.y.z.md`（缺失时工作流退回 `TEMPLATE.md` 并给出 warning）；
+3. `./install.sh` 本机自测，`systemctl --user restart plasma-plasmashell` 后再看「关于」里的版本；
+4. `git tag vx.y.z && git push origin vx.y.z`。
+
+注意：Plasma 在小程序**加载时**读取元数据，所以升级后不重启 `plasma-plasmashell`，「关于」会一直显示旧版本号——这也是 1.0.3 曾经在该字段滞留的原因。
 
 目录结构：
 
