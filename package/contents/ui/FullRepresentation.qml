@@ -37,7 +37,7 @@ Item {
 
     // Distance covered by one mouse-wheel notch; a notch is 120 units.
     readonly property real wheelStep: Kirigami.Units.gridUnit * 2.5
-    // Anything above this counts as "scrolled away from the top".
+    // Anything further than this past the first row counts as scrolled away.
     readonly property real topSnap: 1.0
 
     property string expandedPid: ""
@@ -45,19 +45,77 @@ Item {
     property bool pendingKillForce: false
     property string actionError: ""
 
-    // The table only follows the sampler while it is pinned to the top. As soon
-    // as the reader scrolls away the rows freeze, because a list that re-sorts
-    // itself every second cannot be read or clicked reliably.
+    // How far the list is scrolled past its first row. contentY on its own is
+    // not that number: ListView moves its own origin while scrolling, and the
+    // top of the list is contentY === originY, not contentY === 0.
+    readonly property real scrollOffset: processList.contentY - processList.originY
+
+    // The reader's intent, which is *not* the same thing as scrollOffset being
+    // non-zero. The view rewrites contentY by itself whenever the sampler moves
+    // rows around (it re-anchors the rows that were on screen), and that must
+    // never be mistaken for the reader scrolling away.
+    property bool readerScrolled: false
+    // A drag or flick is in progress: the content belongs to the pointer.
+    property bool readerDragging: false
+    // Guards the one place that writes contentY on the view's behalf, so the
+    // write cannot re-enter the position logic.
+    property bool repinning: false
+
+    // The table only follows the sampler while it is pinned to the top: rows
+    // that re-sort themselves every second cannot be read or clicked reliably.
+    function setReaderScrolled(scrolled) {
+        if (readerScrolled === scrolled) {
+            return;
+        }
+        readerScrolled = scrolled;
+        PerfBackend.processListPaused = scrolled;
+    }
+
+    // A live table always starts at its first row.
+    function pinToTop() {
+        if (repinning || processList.contentY === processList.originY) {
+            return;
+        }
+        repinning = true;
+        // positionViewAtBeginning() goes through the view's own positioning, so
+        // the request survives the refill that moved the content in the first
+        // place; a plain contentY write is sometimes overwritten by it.
+        processList.positionViewAtBeginning();
+        repinning = false;
+    }
+
     function syncLiveState() {
-        PerfBackend.processListPaused = processList.contentY > topSnap;
+        if (repinning) {
+            return;
+        }
+        if (readerDragging || verticalScrollBar.pressed) {
+            // The reader is holding the content: follow the gesture instead of
+            // fighting it, and freeze as soon as it leaves the top. Resuming
+            // mid-drag would re-sort the rows under the pointer, so the way
+            // back is only decided once the pointer is released.
+            if (scrollOffset > topSnap) {
+                setReaderScrolled(true);
+            }
+            return;
+        }
+        if (readerScrolled) {
+            if (scrollOffset <= topSnap) {
+                setReaderScrolled(false);
+            }
+            return;
+        }
+        // Live: the first row belongs on top. Whatever moved it this time was
+        // not the reader, so put it back before the frame is drawn.
+        pinToTop();
     }
 
     function scrollToTop() {
-        if (processList.contentY <= topSnap) {
-            processList.contentY = 0;
-            syncLiveState();
+        if (scrollOffset <= topSnap) {
+            pinToTop();
+            setReaderScrolled(false);
             return;
         }
+        scrollToTopAnimation.to = processList.originY;
         scrollToTopAnimation.restart();
     }
 
@@ -65,8 +123,11 @@ Item {
     // live updates instead of leaving the view at an arbitrary offset.
     function resetViewToTop() {
         scrollToTopAnimation.stop();
-        processList.contentY = 0;
-        syncLiveState();
+        // A drag cannot survive the popup closing or a re-sort, and a stuck flag
+        // would keep the table from ever following the sampler again.
+        readerDragging = false;
+        setReaderScrolled(false);
+        pinToTop();
     }
 
     function toggleExpanded(pid) {
@@ -126,9 +187,16 @@ Item {
         id: scrollToTopAnimation
         target: processList
         property: "contentY"
-        to: 0
         duration: Kirigami.Units.longDuration
         easing.type: Easing.OutCubic
+
+        // Landing on the first row is the whole point of the button: if the
+        // view drifted while the animation ran, fix it here as well instead of
+        // leaving the table a few pixels short and frozen.
+        onFinished: {
+            full.pinToTop();
+            full.setReaderScrolled(false);
+        }
     }
 
     Connections {
@@ -138,6 +206,11 @@ Item {
         }
         function onMovementStarted() {
             scrollToTopAnimation.stop();
+            full.readerDragging = true;
+        }
+        function onMovementEnded() {
+            full.readerDragging = false;
+            full.syncLiveState();
         }
     }
 
@@ -444,6 +517,10 @@ Item {
                     onPressedChanged: {
                         if (pressed) {
                             scrollToTopAnimation.stop();
+                        } else {
+                            // Released: the held handle no longer owns the
+                            // position, so the freeze state can be settled.
+                            full.syncLiveState();
                         }
                     }
                 }
@@ -457,11 +534,17 @@ Item {
                     acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                     onWheel: (wheel) => {
                         scrollToTopAnimation.stop();
-                        const maxY = Math.max(0, processList.contentHeight - processList.height);
+                        const minY = processList.originY;
+                        const maxY = Math.max(minY, minY + processList.contentHeight - processList.height);
                         const delta = wheel.pixelDelta.y !== 0
                             ? wheel.pixelDelta.y
                             : (wheel.angleDelta.y / 120) * full.wheelStep;
-                        processList.contentY = Math.max(0, Math.min(maxY, processList.contentY - delta));
+                        const nextY = Math.max(minY, Math.min(maxY, processList.contentY - delta));
+                        // Declare the intent before moving: a live table undoes
+                        // any contentY change it did not cause, and the wheel is
+                        // very much the reader.
+                        full.setReaderScrolled(nextY - minY > full.topSnap);
+                        processList.contentY = nextY;
                     }
                 }
 
@@ -496,7 +579,7 @@ Item {
                 width: Kirigami.Units.gridUnit * 1.9
                 height: width
                 radius: width / 2
-                visible: processList.contentY > full.topSnap
+                visible: PerfBackend.processListPaused
                 color: full.tintedBackground(backToTopHover.hovered ? 0.22 : 0.14)
                 border.width: 1
                 border.color: full.dividerColor

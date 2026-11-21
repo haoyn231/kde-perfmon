@@ -16,6 +16,7 @@
 #include <QWheelEvent>
 
 #include <cstdio>
+#include <functional>
 
 namespace {
 
@@ -306,6 +307,194 @@ int main(int argc, char **argv)
         });
     }
 
+    // Everything the freeze heuristic looks at, in one line: contentY alone is
+    // not enough to tell "pinned to the top" from "shifted a few pixels and
+    // stuck", and originY explains offsets the reader never produced.
+    auto logListState = [&](const char *label) {
+        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+        QQuickItem *badge = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("pausedBadge"));
+        QQuickItem *button = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("backToTopButton"));
+        QQuickItem *scrollbar = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processScrollBar"));
+        if (!list) {
+            std::fprintf(stderr, "%s: no list\n", label);
+            return;
+        }
+        std::fprintf(stderr,
+                     "%s contentY=%.0f originY=%.0f contentHeight=%.0f height=%.0f "
+                     "paused-badge=%d back-to-top=%d scrolled=%d dragging=%d bar-pressed=%d\n",
+                     label, list->property("contentY").toDouble(), list->property("originY").toDouble(),
+                     list->property("contentHeight").toDouble(), list->height(),
+                     badge ? badge->isVisible() : -1, button ? button->isVisible() : -1,
+                     view.rootObject()->property("readerScrolled").toBool(),
+                     view.rootObject()->property("readerDragging").toBool(),
+                     scrollbar && scrollbar->property("pressed").toBool());
+    };
+
+    // The timers below outlive this function's scopes, so everything they touch
+    // has to live here rather than inside an if block. A table that should be
+    // live must show its first row without a frozen badge; a table the reader
+    // scrolled away from must stay frozen. Both used to be mixed up after a
+    // re-sort, so a mismatch fails the run (and CI).
+    int sortFailures = 0;
+    // Timer callbacks outlive the block scopes they are scheduled from, so any
+    // state they share has to be declared out here as well.
+    QPoint backToTopPoint;
+    int barDragX = 0;
+    int barDragTopY = 0;
+
+    auto checkListState = [&](const char *label, bool shouldBeLive) {
+        logListState(label);
+        QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+        QQuickItem *badge = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("pausedBadge"));
+        if (!list) {
+            ++sortFailures;
+            return;
+        }
+        const qreal offset = list->property("contentY").toDouble() - list->property("originY").toDouble();
+        const bool frozen = badge && badge->isVisible();
+        const bool ok = shouldBeLive ? (qAbs(offset) <= 1.0 && !frozen) : (offset > 1.0 && frozen);
+        if (!ok) {
+            ++sortFailures;
+            std::fprintf(stderr, "preview: %s expected %s, offset=%.0f frozen=%d\n", label,
+                         shouldBeLive ? "live at the top" : "frozen while scrolled", offset, frozen ? 1 : 0);
+        }
+    };
+
+    // Sort-toggle scenario: switching CPU/memory or the sort direction has to
+    // leave the table pinned to the live top. It drives the model the way the
+    // sort chip does (reset the view, then re-sort) and then checks that the
+    // frozen state follows the reader, not ListView's own re-anchoring: the view
+    // rewrites contentY when rows move, which used to look like "the reader
+    // scrolled away" and left the badge stuck on Paused.
+    if (qEnvironmentVariableIsSet("PERFMON_PREVIEW_SORT")) {
+        // Poll instead of listening: contentYChanged lives on QQuickFlickable,
+        // which is not a public header. 16 ms is enough to see whether a jump
+        // survives a frame or is undone before the frame is drawn.
+        if (qEnvironmentVariableIsSet("PERFMON_PREVIEW_TRACE")) {
+            auto *trace = new QTimer(&app);
+            trace->setInterval(16);
+            qreal lastY = -1.0;
+            qreal lastOrigin = -1.0;
+            QObject::connect(trace, &QTimer::timeout, &app, [&]() {
+                QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
+                if (!list) {
+                    return;
+                }
+                const qreal y = list->property("contentY").toDouble();
+                const qreal origin = list->property("originY").toDouble();
+                if (qFuzzyCompare(y + 1.0, lastY + 1.0) && qFuzzyCompare(origin + 1.0, lastOrigin + 1.0)) {
+                    return;
+                }
+                lastY = y;
+                lastOrigin = origin;
+                logListState("SORT-trace");
+            });
+            trace->start();
+        }
+
+        QTimer::singleShot(3000, &app, [&]() {
+            checkListState("SORT-live", true);
+            if (QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"))) {
+                sendWheelNotch(&view, list, 40);
+            }
+            checkListState("SORT-reader-scrolled", false);
+        });
+
+        const auto toggle = [&](const char *key) {
+            QObject *backend = view.engine()->singletonInstance<QObject *>(QStringLiteral("Hao.PerfMon"),
+                                                                          QStringLiteral("PerfBackend"));
+            QMetaObject::invokeMethod(view.rootObject(), "resetViewToTop");
+            if (backend) {
+                QMetaObject::invokeMethod(backend, "toggleSort", Q_ARG(QString, QString::fromLatin1(key)));
+            }
+        };
+
+        QTimer::singleShot(3600, &app, [&]() { toggle("cpu"); });
+        QTimer::singleShot(4200, &app, [&]() { checkListState("SORT-settled-after-cpu", true); });
+        QTimer::singleShot(4800, &app, [&]() { toggle("memory"); });
+        QTimer::singleShot(5400, &app, [&]() { checkListState("SORT-settled-after-memory", true); });
+        QTimer::singleShot(6000, &app, [&]() { toggle("memory"); }); // direction flip
+        QTimer::singleShot(6600, &app, [&]() {
+            checkListState("SORT-settled-after-flip", true);
+            if (QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"))) {
+                sendWheelNotch(&view, list, 40);
+            }
+            checkListState("SORT-scrolled-again", false);
+        });
+        // The floating button, clicked the way a pointer does it: hover, hold,
+        // release. A single press/release pair with no gap in between is
+        // occasionally dropped by the offscreen platform, which made this check
+        // flaky for reasons that had nothing to do with the view.
+        QTimer::singleShot(7000, &app, [&]() {
+            QQuickItem *button = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("backToTopButton"));
+            if (!button || !button->isVisible()) {
+                std::fprintf(stderr, "SORT-back-to-top skipped: button hidden\n");
+                return;
+            }
+            backToTopPoint = button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).toPoint();
+            QTest::mouseMove(&view, backToTopPoint);
+        });
+        QTimer::singleShot(7150, &app, [&]() {
+            logListState("SORT-before-back-to-top");
+            if (!backToTopPoint.isNull()) {
+                QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, backToTopPoint);
+            }
+        });
+        QTimer::singleShot(7300, &app, [&]() {
+            if (backToTopPoint.isNull()) {
+                return;
+            }
+            QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, backToTopPoint);
+            // Park the pointer outside the rows, so the screenshots show no
+            // hover highlight on the row that happened to sit there.
+            QTest::mouseMove(&view, QPoint(4, 4));
+        });
+        QTimer::singleShot(7900, &app, [&]() { checkListState("SORT-back-to-top", true); });
+
+        // Second half: the same recovery through the scrollbar instead of the
+        // floating button, which is the other way a reader gets back to the top.
+        QTimer::singleShot(8200, &app, [&]() {
+            if (QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"))) {
+                sendWheelNotch(&view, list, 40);
+            }
+            checkListState("SORT-frozen-again", false);
+        });
+        // Drag the handle to the very top. The steps are separate timer ticks so
+        // the view actually processes press/move/release instead of receiving
+        // all three inside one callback.
+        QTimer::singleShot(8700, &app, [&]() {
+            QQuickItem *bar = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processScrollBar"));
+            if (!bar || !bar->isVisible()) {
+                std::fprintf(stderr, "SORT-bar-drag skipped: scrollbar hidden\n");
+                return;
+            }
+            const QPointF origin = bar->mapToScene(QPointF(0, 0));
+            const qreal handle = bar->property("size").toDouble();
+            const qreal position = bar->property("position").toDouble();
+            barDragX = int(origin.x() + bar->width() / 2);
+            barDragTopY = int(origin.y() + handle * bar->height() / 2);
+            const int grabY = int(origin.y() + (position + handle / 2) * bar->height());
+            std::fprintf(stderr, "SORT-bar-drag from=%d to=%d\n", grabY, barDragTopY);
+            QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, QPoint(barDragX, grabY));
+        });
+        QTimer::singleShot(8900, &app, [&]() {
+            QTest::mouseMove(&view, QPoint(barDragX, barDragTopY + 40));
+        });
+        QTimer::singleShot(9100, &app, [&]() {
+            QTest::mouseMove(&view, QPoint(barDragX, barDragTopY));
+        });
+        QTimer::singleShot(9300, &app, [&]() {
+            QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, QPoint(barDragX, barDragTopY));
+        });
+        QTimer::singleShot(9900, &app, [&]() { checkListState("SORT-bar-to-top", true); });
+        QTimer::singleShot(10400, &app, [&]() {
+            checkListState("SORT-final", true);
+            grab(QStringLiteral("-sort"));
+            std::fprintf(stderr, "SORT-RESULT failures=%d\n", sortFailures);
+            app.exit(sortFailures == 0 ? 0 : 1);
+        });
+    }
+
     // Scroll / freeze / back-to-top scenario. Each step reports what the user
     // would see, so a regression shows up as a changed log line or a changed
     // frame instead of having to be spotted by hand.
@@ -318,7 +507,15 @@ int main(int argc, char **argv)
     int roleUpdates = 0;
     int resetsWhenFrozen = -1;
 
-    QTimer::singleShot(3000, &app, [&]() {
+    // Both scenarios drive the same popup, so only one of them runs per process.
+    const bool sortScenario = qEnvironmentVariableIsSet("PERFMON_PREVIEW_SORT");
+    auto scrollRunLater = [&](int ms, std::function<void()> fn) {
+        if (!sortScenario) {
+            QTimer::singleShot(ms, &app, fn);
+        }
+    };
+
+    scrollRunLater(3000, [&]() {
         grab(QStringLiteral("-1"));
         QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
         if (list) {
@@ -333,19 +530,22 @@ int main(int argc, char **argv)
         }
     });
 
-    QTimer::singleShot(4000, &app, [&]() {
+    scrollRunLater(4000, [&]() {
         QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
         if (!list) {
             return;
         }
-        list->setProperty("contentY", 600.0);
+        // Scroll like a reader, not with a raw contentY write: a live table
+        // treats any move it did not cause as its own and re-pins the top, so a
+        // property write would be undone on purpose.
+        sendWheelNotch(&view, list, 5);
         QQuickItem *badge = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("pausedBadge"));
-        std::fprintf(stderr, "SCROLL set=%.0f paused-badge=%d\n", listContentY(list),
+        std::fprintf(stderr, "SCROLL wheel-5 contentY=%.0f paused-badge=%d\n", listContentY(list),
                      badge ? badge->isVisible() : -1);
         resetsWhenFrozen = modelResets;
     });
 
-    QTimer::singleShot(5000, &app, [&]() {
+    scrollRunLater(5000, [&]() {
         QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
         if (!list) {
             return;
@@ -355,7 +555,7 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "WHEEL 3-notches %.0f -> %.0f\n", before, listContentY(list));
     });
 
-    QTimer::singleShot(6500, &app, [&]() {
+    scrollRunLater(6500, [&]() {
         QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
         if (!list) {
             return;
@@ -369,7 +569,7 @@ int main(int argc, char **argv)
         grab(QStringLiteral("-2"));
     });
 
-    QTimer::singleShot(7200, &app, [&]() {
+    scrollRunLater(7200, [&]() {
         QQuickItem *button = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("backToTopButton"));
         QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
         if (!button || !list) {
@@ -385,7 +585,7 @@ int main(int argc, char **argv)
                      listContentY(list));
     });
 
-    QTimer::singleShot(8200, &app, [&]() {
+    scrollRunLater(8200, [&]() {
         QQuickItem *list = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("processList"));
         QQuickItem *badge = view.rootObject()->findChild<QQuickItem *>(QStringLiteral("pausedBadge"));
         std::fprintf(stderr, "RESUMED contentY=%.0f resets=%d moves=%d updates=%d overlaps=%d paused-badge=%d\n",
@@ -393,7 +593,7 @@ int main(int argc, char **argv)
                      badge ? badge->isVisible() : -1);
     });
 
-    QTimer::singleShot(9000, &app, [&]() {
+    scrollRunLater(9000, [&]() {
         grab(QStringLiteral("-3"));
         app.quit();
     });
