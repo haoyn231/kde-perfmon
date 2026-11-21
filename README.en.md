@@ -51,14 +51,14 @@ Inspired by [DankMaterialShell (DMS)](https://github.com/AvengeMedia/DankMateria
 The release archive contains a **prebuilt** plugin; no compiler is needed.
 
 1. Requirements: KDE Plasma 6 (Qt 6.5+), Kirigami (shipped with Plasma). The release is built on Arch Linux / Plasma 6.8 / Qt 6.12. If the plugin fails to load on another distribution, use Option 2 and build from source.
-2. Download `kde-perfmon-vX.Y.Z.tar.gz` and the matching `.sha256` from [Releases](https://github.com/haoyn231/kde-perfmon/releases) — substitute the version shown on that page, currently `1.2.1` — then verify:
+2. Download `kde-perfmon-vX.Y.Z.tar.gz` and the matching `.sha256` from [Releases](https://github.com/haoyn231/kde-perfmon/releases) — substitute the version shown on that page, currently `1.2.2` — then verify:
    ```bash
-   sha256sum -c kde-perfmon-v1.2.1.tar.gz.sha256
+   sha256sum -c kde-perfmon-v1.2.2.tar.gz.sha256
    ```
 3. Extract it into your user Plasma widget directory:
    ```bash
    mkdir -p ~/.local/share/plasma/plasmoids
-   tar -xzf kde-perfmon-v1.2.1.tar.gz -C ~/.local/share/plasma/plasmoids
+   tar -xzf kde-perfmon-v1.2.2.tar.gz -C ~/.local/share/plasma/plasmoids
    ```
    You should then have:
    ```

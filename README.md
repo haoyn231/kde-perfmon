@@ -51,14 +51,14 @@ KDE Plasma 6 面板小程序（Plasmoid）：在菜单栏预览 CPU 与内存占
 Release 包内是**已经编译好**的插件，普通用户不需要安装编译工具。
 
 1. 系统要求：KDE Plasma 6（Qt 6.5+）、Kirigami（Plasma 自带）。发布包在 Arch Linux / Plasma 6.8 / Qt 6.12 上构建；其它发行版如果插件加载失败，请改用「方式二」从源码构建。
-2. 从 [Releases](https://github.com/haoyn231/kde-perfmon/releases) 下载 `kde-perfmon-vX.Y.Z.tar.gz` 和对应的 `.sha256` 文件（`X.Y.Z` 换成该页面上的版本号，当前是 `1.2.1`），并校验：
+2. 从 [Releases](https://github.com/haoyn231/kde-perfmon/releases) 下载 `kde-perfmon-vX.Y.Z.tar.gz` 和对应的 `.sha256` 文件（`X.Y.Z` 换成该页面上的版本号，当前是 `1.2.2`），并校验：
    ```bash
-   sha256sum -c kde-perfmon-v1.2.1.tar.gz.sha256
+   sha256sum -c kde-perfmon-v1.2.2.tar.gz.sha256
    ```
 3. 解压到当前用户的 Plasma 小程序目录：
    ```bash
    mkdir -p ~/.local/share/plasma/plasmoids
-   tar -xzf kde-perfmon-v1.2.1.tar.gz -C ~/.local/share/plasma/plasmoids
+   tar -xzf kde-perfmon-v1.2.2.tar.gz -C ~/.local/share/plasma/plasmoids
    ```
    解压后应存在：
    ```
@@ -177,7 +177,7 @@ QT_QPA_PLATFORMTHEME=KDE QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
     ./build/perfmon-preview package/contents/ui/FullRepresentation.qml /tmp/preview
 ```
 
-CI 在 Arch Linux 容器中安装 Qt 6 / Kirigami / libplasma，执行构建、单元测试、`qmllint` 和离屏渲染。推送 `v*.*.*` 形式的 tag（例如 `v1.2.1`）会触发 Release 工作流，自动构建并上传可直接安装的插件包与 SHA-256 校验文件。
+CI 在 Arch Linux 容器中安装 Qt 6 / Kirigami / libplasma，执行构建、单元测试、`qmllint` 和离屏渲染。推送 `v*.*.*` 形式的 tag（例如 `v1.2.2`）会触发 Release 工作流，自动构建并上传可直接安装的插件包与 SHA-256 校验文件。
 
 ### 发布（打 tag 前必查）
 
