@@ -16,6 +16,12 @@ cmake --build build -j"$(nproc)"
 
 /usr/lib/qt6/bin/qmllint -I package/contents/lib package/contents/ui/*.qml
 
+# The freeze / back-to-top assertions need a table that is actually scrollable,
+# and a fresh container runs a handful of processes. Park a few dozen sleepers
+# in the background for the duration of the render checks.
+for _ in $(seq 1 60); do sleep 300 & done
+trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+
 export QT_QPA_PLATFORM=offscreen
 export QT_QUICK_BACKEND=software
 ./build/perfmon-preview package/contents/ui/FullRepresentation.qml /tmp/perfmon-preview
