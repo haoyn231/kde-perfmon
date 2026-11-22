@@ -70,10 +70,30 @@ Item {
             color: Kirigami.Theme.textColor
         }
 
+        // 数字位宽不一样（"7.3%" 与 "100.0%" 差两个字符），按内容自适应会让
+        // 面板上的图标随读数每秒变宽变窄。这里按最宽的可能取值预留固定位宽并
+        // 右对齐：位数变化只在格子内左右挪动，图标整体宽度自始至终不变。
+        // 读数范围 0–100、固定一位小数（Format.percent）：最长的是 "100.0%"；
+        // 主题字体若没兑现 tnum，"8" 比 "1" 宽，量 "88.8%" 才够，两个取大。
         Text {
+            id: valueLabel
             text: metric.valueText
             color: Kirigami.Theme.textColor
             font.features: ({ "tnum": 1 })
+            Layout.preferredWidth: Math.max(longestSample.advanceWidth, widestSample.advanceWidth)
+            horizontalAlignment: Text.AlignRight
+        }
+
+        TextMetrics {
+            id: longestSample
+            font: valueLabel.font
+            text: "100.0%"
+        }
+
+        TextMetrics {
+            id: widestSample
+            font: valueLabel.font
+            text: "88.8%"
         }
 
         HoverHandler {
