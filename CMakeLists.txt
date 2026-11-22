@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(kde-perfmon VERSION 1.2.3 LANGUAGES CXX)
+project(kde-perfmon VERSION 1.2.2 LANGUAGES CXX)
 
 # The plasmoid's "About" dialog shows KPlugin.Version from package/metadata.json,
 # while the CMake project version tags the build. A stale metadata version is
